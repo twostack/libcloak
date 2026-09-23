@@ -637,3 +637,124 @@ was never meant to be. The signature is, and it caught every one of them.
 The spec's other half of the expiry rule — a payee refusing to acknowledge a
 payment against an invoice that had expired when the transfer was submitted —
 needs the acknowledgement, and lands with payments in group 8.
+
+## 7. Payments: the thing the library is for (2026-09-23)
+
+A payer builds a transfer against an invoice it checked and a path its own view
+vouches for. A payee checks the proof against headers its own source vouches for
+and acknowledges. Neither side asks anybody a question that names a note, an
+address or a wallet, and neither side has to believe anyone.
+
+Two payments are under test, and they are different payments on purpose. One
+libcloak builds itself — a real spend proof against the fixture's round-1 note —
+which is what the **build** path is tested on. One the fixture already mined —
+round 2 pays the wallet 200 at leaf 32 — which is what the **check** path is
+tested on, because checking needs a round a chain really carried.
+
+### The build order is the contract, because a STARK is behind it
+
+`PaymentBuilder.build` stops at the first failure: the invoice (its pool, its
+expiry, its signature), the note (held here, not already in flight, covers the
+amount), the path (the view will yield one at the pool's tip — where "too far
+behind" is caught), and the anchor (the path really reaches the root the view
+holds). Only then are the notes made, the bundle sealed and the proof proved.
+
+The test does not take that on trust either: an invoice that asks for more than
+the note holds, an expired invoice and a view eight rounds behind all come back
+in under 100 ms, against the 118 ms the proof itself costs.
+
+**The note is not reserved by the builder.** Reserving is what an *accepted*
+submission does, because until a coordinator has taken the transfer nothing has
+been spent. A note already reserved or spent is refused at step 2 instead.
+
+### The step that cannot fail on its own
+
+The spec asks that a proof for somebody else's note fail "at the commitment
+step, naming it". There is no such step to name, and this is worth writing down
+rather than faking.
+
+An opening carries no commitment. The commitment is **computed** from the
+opening and the payee's own `pk_d`, so the only thing that can then fail is the
+walk to the round's root — and under another key the commitment is a different
+value, so the walk lands somewhere else. The refusal says exactly that, naming
+the position, the root the path reached and the round's own root, which is the
+answer a person can act on. The step that *can* fail by itself is an opening
+that is not a note at all, and tstokenlib does name that one `commitment`.
+
+The clause in that scenario which carries the weight is its second one, and it
+holds: the witness being mined and the round being this pool's are **not**
+reported as proof of anything when the note is not the payee's. Nothing is
+reported paid, the note is not taken into the store, and the store and the view
+are byte-identical afterwards.
+
+### An acknowledgement is checked against the invoice alone
+
+The payee signs the invoice id, the round and the value under the key that
+invoice was issued from; the payer verifies with the public half the invoice
+already carries. So the payer ends up holding evidence, from the only person who
+could have produced it, that the consideration was delivered against a payment
+the payee itself checked.
+
+This is also where the invoices spec's other half lands: a payee will not
+acknowledge a payment against an invoice that had already expired when the round
+was mined. The clock it uses is the **block's own timestamp**, read off the
+header the payee proved for itself — the only clock in the exchange that the
+payer did not supply. It is approximate, and it is unforgeable by the payer, and
+those are the two properties that matter. A payee refusing here is not refusing
+the money; it is refusing to sign that the money arrived in time, which is a
+different statement.
+
+### Measured (Apple M3 Pro, `dart test`, test parameters)
+
+| | |
+|---|---|
+| the wallet's own build work | **8 ms** (bound 200 ms) |
+| the spend proof beside it | 118 ms |
+| the transfer that comes out | 14,812 B |
+| a standing payment proof | **793,304 B** (bound 1 MB) — round 141,070, witness 651,059 |
+| checking one | **63.7 ms** (bound 100 ms; best of 7, 176 ms worst under a loaded suite) |
+| a short payment proof | **1,098 B** (bound 4 KB) |
+| an acknowledgement | 94 B |
+
+Two of those are the argument of the whole capability. The first is 8 ms against
+118: everything libcloak does for a payment is cheap, and the only expensive
+thing is a STARK that the pool's own parameters fix. The second is 1,098 bytes
+against 793,304 — a factor of **722** — which is what a payee buys by following
+the pool for 32 bytes a round, and it is the same proof: the payee applies the
+same commitment and path checks, against a root its own fold produced rather
+than one inside the message.
+
+The 63.7 ms is the best of seven readings, and it is reported that way for a
+reason: the bound is *per core*, `dart test` runs files beside each other, and a
+single wall-clock reading under a loaded suite measured 176 ms — the machine,
+not the check. Interference can only make a reading longer, so the minimum is
+the honest estimate of one core's cost. This was the one measurement in the
+library with less than 2x of headroom, which is why it was the one that noticed.
+
+The check is parsing and hashing and nothing else. No STARK is verified, because
+the round was mined, which means the chain already ran the pool's verifier over
+it; almost all of the 793 KB is the PP1 unlock's proof, which the payee hashes
+once for the txid and never reads.
+
+### What the short form must never carry
+
+Its own commitment root. A short proof with 32 bytes appended is refused at the
+`cmRoot` field as malformed, rather than that root being used — because a root
+that arrived inside a proof is evidence of nothing, and it is the one thing the
+short form has no evidence for. A payee that has not folded the round refuses
+naming both rounds, and the payer then sends the standing form; that is a
+fallback, not a failed payment, and the test runs the whole exchange.
+
+### Already verified elsewhere
+
+The spec's "Mutated payment proofs" — 10,000 mutated and truncated proofs, every
+one refused with a named reason and none reported paid — is the mutation run in
+`test/lineage_attack_test.dart` from group 2 (5,604 refused at the encoding,
+4,396 decoded and then refused, **0 still paid**). "A round with a forged
+lineage" is the localnet attack in the same file: a lookalike PP1 mined on a real
+regtest node and still refused at `PP1 is this pool's script`.
+
+### Owed
+
+Submitting — "Each of the twelve refusals" and "Accepted and awaiting" — needs
+the coordinator client, and is task 9.2 by the plan's own reckoning.

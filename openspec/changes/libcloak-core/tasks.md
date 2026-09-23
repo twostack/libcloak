@@ -129,12 +129,26 @@ and 1,943 B with the memo full, both under the 2 KB bound.
 
 ## 8. Payments
 
-- [ ] 8.1 Implement `builder.dart`: an invoice and a note to a `ShieldedTransfer` through tstokenlib, with the path from the view; verify payments "A payment on the fixture's chain", "Not enough in the note" and "An expired invoice".
-- [ ] 8.2 Implement `payment_proof.dart`: the versioned self-contained encoding (round, witness, the witness's merkle proof and block hash, the note opening, the position, the path); verify payments "Nothing to look up" and "Two builds agree".
-- [ ] 8.3 Implement `checker.dart`: the payee's checks in the specified order, calling tstokenlib's proven-round and proven-note checks; verify payments "A good payment is accepted", "A note that is not the payee's", "A path to another round" and the forged-lineage scenario from task 2.1.
-- [ ] 8.4 Implement `acknowledgement.dart`; verify payments "An acknowledgement checks against its invoice" and "An acknowledgement for another invoice".
-- [ ] 8.5 Verify payments "Mutated payment proofs" (10,000 mutated and truncated), "A proof that claims a huge length", "Nothing secret in a proof", "Nothing secret in a refusal" and "State after a failed check".
-- [ ] 8.6 Measure the check and the encoding at test parameters; verify "Checking is cheap" (under 100 ms), "Size at test parameters" (under 1 MB) and libcloak's own build work (under 200 ms excluding the spend proof), and record all three in `docs/DESIGN.md`.
+- [x] 8.1 Implement `builder.dart`: an invoice and a note to a `ShieldedTransfer` through tstokenlib, with the path from the view; verify payments "A payment on the fixture's chain", "Not enough in the note" and "An expired invoice".
+- [x] 8.2 Implement `payment_proof.dart`: the versioned self-contained encoding (round, witness, the witness's merkle proof and block hash, the note opening, the position, the path); verify payments "Nothing to look up" and "Two builds agree".
+- [x] 8.3 Implement `checker.dart`: the payee's checks in the specified order, calling tstokenlib's proven-round and proven-note checks; verify payments "A good payment is accepted", "A note that is not the payee's", "A path to another round" and the forged-lineage scenario from task 2.1.
+- [x] 8.4 Implement `acknowledgement.dart`; verify payments "An acknowledgement checks against its invoice" and "An acknowledgement for another invoice".
+- [x] 8.5 Verify payments "Mutated payment proofs" (10,000 mutated and truncated), "A proof that claims a huge length", "Nothing secret in a proof", "Nothing secret in a refusal" and "State after a failed check".
+- [x] 8.6 Measure the check and the encoding at test parameters; verify "Checking is cheap" (under 100 ms), "Size at test parameters" (under 1 MB) and libcloak's own build work (under 200 ms excluding the spend proof), and record all three in `docs/DESIGN.md`.
+
+**Group 8 note.** The spec's "commitment step" does not exist to be named: an
+opening carries no commitment, so it is computed from the opening and the
+payee's `pk_d` and the only thing that can fail is the walk to the round's root.
+The refusal names the position and both roots, which is the actionable answer,
+and the clause that matters — the earlier steps are not reported as proof of
+anything — is verified. `PoolEvidence` does name `commitment` for the one
+failure that stands alone, an opening that is not a note. An acknowledgement
+uses the **block's own timestamp** for the invoices spec's expiry-at-mining
+rule, because it is the only clock in the exchange the payer did not supply.
+Measured: build work 8 ms beside a 118 ms proof, standing proof 793,304 B
+checked in 63 ms, short proof 1,098 B — a factor of 722. "Mutated payment
+proofs" and "A round with a forged lineage" are the runs already in
+`test/lineage_attack_test.dart`; submitting is task 9.2.
 
 ## 9. The coordinator client
 

@@ -22,6 +22,17 @@ class ProvenHeader {
 
   /// The merkle root, display order.
   List<int> get merkleRoot => bytes.sublist(36, 68).reversed.toList();
+
+  /// The time the miner stamped on this block.
+  ///
+  /// It is the only clock a payee has that the payer did not supply, so it is
+  /// what an acknowledgement uses to say whether a payment arrived before its
+  /// invoice expired. A miner chooses it within rules the network enforces,
+  /// which makes it approximate and unforgeable-by-the-payer, and those are
+  /// the two properties that matter here.
+  DateTime get time => DateTime.fromMillisecondsSinceEpoch(
+      1000 * (bytes[68] | (bytes[69] << 8) | (bytes[70] << 16) | (bytes[71] << 24)),
+      isUtc: true);
 }
 
 /// Turns a block hash into a [ProvenHeader], or says why not.
