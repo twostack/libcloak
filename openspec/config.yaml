@@ -1,0 +1,78 @@
+schema: spec-driven
+
+context: |
+  libcloak is the wallet library for the TSL1_SP shielded pool: a headless Dart 3
+  package (lib/, test/ with package:test) that holds one person's keys, notes,
+  invoices, payments and the proofs of those payments. It has no UI, no daemon and
+  no network of its own: a host supplies a transport and a source of block headers
+  through ports libcloak defines, and libcloak supplies the rest. The running
+  record is docs/DESIGN.md, appended in dated sections.
+
+  The pool itself lives in ../tstokenlib (a path dependency, branch
+  feature/shielded-pool, package tstokenlib), and libcloak never reimplements any
+  of it. From there come the keys and hashes (PoolWalletKeys, PoolHash,
+  NoteAddress), the notes and their encryption (NotePlaintext, OutputNote,
+  SpendNote, NoteEncryption, NoteBundle), the spend circuit and prover
+  (PoolSpendAir, StarkProver, ShieldedTransfer), the ledger, chain reader, note
+  scanner and commitment tree (ShieldedLedger, ShieldedPoolLayout,
+  ShieldedChainReader, ShieldedNoteScanner, NoteCommitmentTree, MerklePath),
+  the deposit and withdrawal builders (ShieldedPoolTool), and the
+  wallet-to-coordinator protocol (PoolSubmission, PoolReply, PoolDescriptor,
+  PoolAnnouncement, RefusalReason). Their specs are in
+  ../tstokenlib/openspec/specs (pool-transfer, pool-ledger, pool-coordinator,
+  coordinator-service, pool-protocol) and are referenced, never copied. The pool's
+  design record is ../tstokenlib/docs/ZK_SHIELDED_POOL_TSL1_DESIGN.md.
+
+  The rule the whole library is shaped by: people pay people, in consideration of
+  something, so a payment is delivered *with its proof* over the channel the payer
+  and payee already have. libcloak does not scan a chain and makes no request that
+  names an address, a txid or an outpoint. The one exception is restoring a wallet
+  from its seed, where there is nobody to ask. A design that reaches for a lookup
+  is wrong here, not merely suboptimal.
+
+  How a note stays spendable: the pool's commitment tree appends a fixed,
+  power-of-two block of leaves per round (512 at production parameters, 32 at test
+  parameters), so round N owns exactly the aligned subtree at level log2(block).
+  A note's lower siblings are therefore frozen when its own round is mined, and a
+  wallet keeps its paths current by folding one 32-byte block root per round into
+  an upper frontier, then checking the fold against the cmRoot in a header it
+  proved off the chain itself. That is 32 bytes a round, it is the same broadcast
+  for everyone, and it asks nothing that names the wallet. The pool's header
+  carries four anchors (PoolHeader.ringEntries), so a wallet must be current
+  within four rounds at the moment it spends.
+
+  Chain and transport are ports, not dependencies: libcloak names what it needs
+  (a proven header for a block hash, a merkle proof check, send and receive of
+  opaque frames) and a host wires them. The hosts we expect are a CLI over
+  ricochet (../ricochet-dart-client) talking to ../pool-coordinator, and
+  ../overnode_v2. The SPV implementation is being extracted from ../libspiffy
+  (lib/src/spv, 8 files, 2,324 lines; only block_header_chain.dart couples to
+  libspiffy's internal storage) into a package both can depend on; until that
+  lands, libcloak is tested against its own fakes.
+
+  Chain limits (BSV runs Teranode): 10 MB per transaction, 1,000,000 ops per
+  script, 100 MB per script. ARC's parse limit of 1,636,802 bytes per scriptSig
+  means production-parameter witnesses do not go through ARC, so testnet runs at
+  test parameters.
+
+  Conventions: commit only when the user asks, on main; never push, merge or open
+  a PR unless asked; commits end with "Co-Authored-By: Claude Opus 5 (1M context)
+  <noreply@anthropic.com>" (adjust the model name to the one doing the work); do
+  not commit tool/scratch or .claude/settings.local.json. Run `dart analyze lib
+  test` clean before finishing and the suites that touch what changed. Doc
+  comments are prose with a "why"; no em dashes in prose. Secrets (the seed, the
+  spending key, passphrases) never appear in logs, errors or tests as real values.
+
+rules:
+  proposal:
+    - Name the measured numbers the change is meant to move and the bounds they must stay inside; say which of them the specs make requirements.
+  specs:
+    - Each capability states its non-functional contract as requirements with scenarios, answering in turn untrusted input, secrets and privacy, trust, determinism, compatibility, performance and resources, and failure behaviour; say "not applicable" in the proposal rather than silently omitting one.
+    - A bound another component relies on is a requirement; a threshold that only steers the implementation belongs in design.md.
+    - Scenarios use inputs the test suite can produce today (tstokenlib's PoolChainFixture, real parameter sets, real files); extending the fixture is a task, not an assumption.
+    - Numbers in requirements and scenarios are either measured (say where) or bounds a task will check; no comparisons with anything unmeasured.
+    - Privacy requirements say what the component must not reveal by the way it runs, not only what it must not output; a requirement that permits a request naming an address, txid or outpoint is wrong unless it is seed recovery.
+  design:
+    - For each bound set before measuring, say what happens if the measurement fails it.
+  tasks:
+    - Every task states how it is verified; every non-functional requirement has a verification task, robustness ones by mutation testing.
