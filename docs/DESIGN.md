@@ -558,3 +558,82 @@ as AES-SIV does it), which keeps identical stores identical and leaks only that
 two files hold the same notes — but that is a change to the capability and not
 something to slip into an apply. `NoteStore.encode` and `decode` are public and
 deterministic, so a host that wants its own at-rest story already has the bytes.
+
+## 6. Invoices: asking for money (2026-09-23)
+
+An invoice is the first half of "payment in consideration of something": a fresh
+address, an amount, an expiry, an id and what it is for. A payee writes one
+without looking anything up — it names the pool by its tokenId and carries
+nothing else about it.
+
+### What signs an invoice, and what that proves
+
+The spec asks for a signature "under the key the address was issued from",
+checked by the payer "against the address's own key". An address carries a
+diversifier, `pk_d = H(ivk, d)` and a KEM public key, and none of those is a
+signing key: a hash has no private counterpart and a KEM is not a signature
+scheme.
+
+So the signing key is derived the same way the address is — `Ed25519` from
+`SHA256("tsl1-libcloak/invoice/1" ‖ ivk ‖ d)` — and its public half travels in
+the invoice. One address, one key, derived and never stored. A wallet that can
+issue the address can sign for it and a wallet that cannot, cannot.
+
+Per address and not per wallet, deliberately. A wallet-wide key would let a
+payer, or anybody who saw two invoices, tie them to one payee — the exact thing a
+fresh address per invoice exists to prevent.
+
+**What that buys, stated plainly.** The signature covers every other field, so a
+substituted address, a changed amount or an altered expiry is caught: the
+scenario the spec names is exactly this, and it is verified for the address, the
+amount and the tokenId. What it does **not** buy is protection from a man in the
+middle who replaces the whole invoice — address, key and signature together —
+because the key is as new as the address and a payer has never seen it before.
+No self-contained message can do better; binding an invoice to a person needs
+that person's key from somewhere else. For libcloak that is the point rather
+than a gap: people pay people, and the invoice is handed over inside a
+conversation that already establishes who is who. A host that wants more can pin
+a payee's key across invoices, but it cannot be done here, because per-address
+keys are what keeps two invoices from the same payee unlinkable.
+
+### The check order is the contract
+
+`Invoice.read` runs, stopping at the first failure: the encoding and its bounds,
+then the pool, then the expiry, then the signature. Cheapest and most decisive
+first — the first three are comparisons on fields and the fourth is the first
+thing that costs a key operation. The spend proof, which costs seconds, is
+behind all four.
+
+The test does not take the order on trust. An invoice that is both expired and
+unsigned is refused for being **expired**, which is what shows the expiry gate
+stands in front of the key work.
+
+### An expiry is a UTC instant
+
+Round-tripping an invoice through its own codec changed the expiry field, and
+that was a real bug rather than a test being fussy:
+`DateTime.fromMillisecondsSinceEpoch` returns a **local** time, and Dart's
+`DateTime ==` compares the zone flag as well as the instant. Two people in
+different places would have held different values for the same field. The
+expiry is normalised to UTC on construction, so the field a payee wrote is the
+field a payer reads whichever zones they are in.
+
+### Measured (Apple M3 Pro, `dart test`)
+
+| | |
+|---|---|
+| invoice with a 256-byte memo, hybrid KEM | **1,687 B** (bound 2 KB) |
+| the same with the memo full (512 B) | 1,943 B |
+| of which the address | 1,261 B |
+| 10,000 mutated and truncated invoices | 7,823 parsed, of those **1** still verified — a flip that flipped back — and 7,440 refused at the signature; 2,177 refused at the encoding; **0 unnamed errors** |
+
+That 7,823 looks alarming and is the same fact group 3 recorded about addresses:
+three quarters of an invoice is the 1,216-byte ML-KEM public key, and a flipped
+bit inside one is a well-formed key nobody holds. Parsing is not the defence and
+was never meant to be. The signature is, and it caught every one of them.
+
+### Owed
+
+The spec's other half of the expiry rule — a payee refusing to acknowledge a
+payment against an invoice that had expired when the transfer was submitted —
+needs the acknowledgement, and lands with payments in group 8.

@@ -29,6 +29,7 @@ export 'src/keys/wallet_keys.dart' show WalletKeys, AddressCodec;
 export 'src/headers/merkle_membership.dart' show MerkleMembership, MerkleProof;
 export 'src/headers/proven_header.dart' show HeaderChecker, ProvenHeader;
 export 'src/msg/codec.dart' show Reader, Writer;
+export 'src/msg/invoice.dart' show Invoice, InvoiceKey;
 export 'src/msg/payment_proof.dart' show PaymentProof, ProofForm, NoteOpening;
 export 'src/notes/balance.dart' show Balance;
 export 'src/notes/note.dart' show HeldNote, NoteState;

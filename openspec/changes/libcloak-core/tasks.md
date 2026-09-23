@@ -112,8 +112,20 @@ and is a decision with a stated cost; see `docs/DESIGN.md` section 5.
 
 ## 7. Invoices
 
-- [ ] 7.1 Implement `invoice.dart` and its codec: the versioned encoding with explicit lengths, the fresh address, the amount, the expiry, the id, the bounded memo and the signature; verify invoices "An invoice round trips", "A substituted address", "An invoice names one pool" and "Expired before proving".
-- [ ] 7.2 Verify invoices "Mutated invoices" (10,000 mutated and truncated), "Unknown version", "Nothing extra in an invoice" and "A refused invoice changes nothing"; measure and verify "Size" (a 256-byte memo under 2 KB) and record it in `docs/DESIGN.md`.
+- [x] 7.1 Implement `invoice.dart` and its codec: the versioned encoding with explicit lengths, the fresh address, the amount, the expiry, the id, the bounded memo and the signature; verify invoices "An invoice round trips", "A substituted address", "An invoice names one pool" and "Expired before proving".
+- [x] 7.2 Verify invoices "Mutated invoices" (10,000 mutated and truncated), "Unknown version", "Nothing extra in an invoice" and "A refused invoice changes nothing"; measure and verify "Size" (a 256-byte memo under 2 KB) and record it in `docs/DESIGN.md`.
+
+**Group 7 note.** An address carries no signing key — `pk_d` is a hash and the
+KEM is not a signature scheme — so the invoice's key is derived the way the
+address is, Ed25519 from `SHA256("tsl1-libcloak/invoice/1" ‖ ivk ‖ d)`, one per
+address so two invoices from a payee stay unlinkable. That catches a
+substituted address, a changed amount and an altered expiry; it does not catch a
+man in the middle who replaces key and signature too, which no self-contained
+message can, and `docs/DESIGN.md` section 6 says so rather than implying
+otherwise. Found and fixed a real round-trip bug: `DateTime` carries a zone flag
+and `fromMillisecondsSinceEpoch` returns local, so an expiry did not survive its
+own codec; it is normalised to UTC now. Measured: 1,687 B with a 256-byte memo
+and 1,943 B with the memo full, both under the 2 KB bound.
 
 ## 8. Payments
 
