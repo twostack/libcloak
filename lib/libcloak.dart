@@ -40,7 +40,9 @@ export 'src/pool/frontier.dart' show Checkpoint, UpperFrontier;
 export 'src/pool/note_path.dart' show TrackedNote;
 export 'src/pool/pool_view.dart' show PoolView, PoolViewFile;
 export 'src/net/transport.dart' show Transport, FeedEntry, TransportFailure;
+export 'src/net/coordinator_client.dart'
+    show CoordinatorClient, SubmissionOutcome, Submitted, Disagreement, FeedProgress, BlockRootRun;
 export 'src/pay/acknowledgement.dart' show Acknowledgement;
 export 'src/pay/builder.dart' show PaymentBuilder, BuiltPayment, PaymentProofs;
-export 'src/pay/checker.dart' show PaymentChecker, CheckedPayment;
+export 'src/pay/checker.dart' show PaymentChecker, CheckedPayment, CheckedHead;
 export 'src/refusal.dart' show Refusal, shortHex;

@@ -179,6 +179,16 @@ class FakeTransport implements Transport {
   int failFirst = 0;
   int attempts = 0;
 
+  /// While set, a request is parked in [held] rather than answered, and the
+  /// test completes them in whatever order it likes. That is what makes "two
+  /// submissions in flight and their replies arrive out of order" a real
+  /// test rather than two calls that happen to be awaited in sequence.
+  bool hold = false;
+
+  /// The parked requests, oldest first: the frame and the completer whose
+  /// future the caller is waiting on.
+  final List<(List<int>, Completer<List<int>>)> held = [];
+
   FakeTransport({List<List<int>>? feed}) : feed = feed ?? [];
 
   @override
@@ -188,6 +198,11 @@ class FakeTransport implements Transport {
     final f = fail;
     if (f != null) throw TransportFailure('request', f);
     if (attempts <= failFirst) throw const TransportFailure('request', 'the pool did not answer');
+    if (hold) {
+      final waiting = Completer<List<int>>();
+      held.add((List<int>.from(frame), waiting));
+      return waiting.future;
+    }
     final a = answer;
     if (a == null) throw const TransportFailure('request', 'this transport was given no answer');
     return a(frame);

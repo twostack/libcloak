@@ -152,9 +152,39 @@ proofs" and "A round with a forged lineage" are the runs already in
 
 ## 9. The coordinator client
 
-- [ ] 9.1 Implement `coordinator_client.dart`: the descriptor first, submissions encoded through `PoolSubmission`, replies matched by id with a timeout, announcements in round order handing block roots to the view, and disagreement detection; verify coordinator-client "Descriptor first", "A feed that does not start with a descriptor", "A reply matched by id", "A reply for an unknown id", "No reply", "Announcements in order", "A round out of order" and "A disagreeing announcement".
-- [ ] 9.2 Verify payments "Each of the twelve refusals" and "Accepted and awaiting" against the fake transport.
-- [ ] 9.3 Verify coordinator-client "Random frames" (10,000 random and mutated frames), "What is sent" and "The transport is down".
+- [x] 9.1 Implement `coordinator_client.dart`: the descriptor first, submissions encoded through `PoolSubmission`, replies matched by id with a timeout, announcements in round order handing block roots to the view, and disagreement detection; verify coordinator-client "Descriptor first", "A feed that does not start with a descriptor", "A reply matched by id", "A reply for an unknown id", "No reply", "Announcements in order", "A round out of order" and "A disagreeing announcement".
+- [x] 9.2 Verify payments "Each of the twelve refusals" and "Accepted and awaiting" against the fake transport.
+- [x] 9.3 Verify coordinator-client "Random frames" (10,000 random and mutated frames), "What is sent" and "The transport is down".
+
+**Carried by group 9, because the task list did not carry it.** The
+coordinator-client spec's whole **Catching up** requirement, and the one after
+it, are not in the three one-liners above. They are done here, in
+`test/coordinator_client_test.dart`, because the client is where they live:
+
+- "A wallet with no state becomes current" (`CoordinatorClient.current`),
+  "A wallet that fell behind" (`bringForward`), and "The pool lies" — six of them,
+  a bent frontier, a bent block root, a head whose witness does not spend the
+  round it names, a head in a block this wallet does not have, a head that
+  claims the wrong round number, and a frontier standing at the wrong round;
+- "Requests come from the published set" and "Nothing wallet-derived is sent";
+- "A transport port, not a network" / "The suite runs on a fake transport",
+  which every test in the file runs under.
+
+**One piece did not exist and was built here.** A head proof is a standing
+payment proof without the note, and `PaymentChecker` had no path for one.
+`PaymentChecker.head` now runs steps 2 to 4 and stops, sharing `_provenRound`
+with the standing form, and takes the round number from the pool header's own
+leaf count rather than from the reply. Without it there is nothing a frontier
+or a thousand folded block roots could be checked against, so "the pool is a
+convenient server and never a trusted one" would have had no implementation.
+
+**One export was added to tstokenlib**: `PoolCatchUpRequest`,
+`PoolCatchUpReply` and `CatchUpKind`, which a wallet needs to ask the three
+catch-up questions.
+
+**Owed to group 10.** "Each of the twelve refusals" says the reason is recorded
+in the journal. The reason is on `SubmissionOutcome.refusal` under the
+protocol's own name, and nothing writes it down yet; the journal is group 10.
 
 ## 10. The journal
 

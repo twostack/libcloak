@@ -758,3 +758,151 @@ regtest node and still refused at `PP1 is this pool's script`.
 
 Submitting — "Each of the twelve refusals" and "Accepted and awaiting" — needs
 the coordinator client, and is task 9.2 by the plan's own reckoning.
+
+## 8. The coordinator client (2026-09-23)
+
+The wallet's side of tstokenlib's wallet-to-coordinator protocol, over a
+transport the host supplies. `lib/src/net/coordinator_client.dart`, and one
+addition to `lib/src/pay/checker.dart` that the spec needed and nothing had
+built yet.
+
+### Folding and checking, once more
+
+`CoordinatorClient.follow` hands each announcement's block root to the view
+**unchecked**. An announcement is a claim: it arrives on a feed anyone can
+write, it carries no proof, and a client that let one set `PoolView.checkedTo`
+would have turned the pool into an authority in the one place the library says
+it is not. The number that makes a fold evidence comes from `headProof`, and
+from nowhere else.
+
+That leaves a wallet folding arithmetic it cannot yet spend from, which is
+exactly what `round` and `checkedTo` are two numbers for. The sequence a
+spending wallet runs is: `follow` to stay current, `bringForward` (or one
+`headProof` plus `PoolView.check`) before building a payment.
+
+### The head proof
+
+A head proof is a standing payment proof with the note taken out —
+`PaymentChecker.head` runs steps 2 to 4 of the payment check and stops. Both
+paths now share `_provenRound`, so there is one implementation of "this witness
+is in a block I accept, and it spends a round that is really this pool's".
+
+Its round number is **not** the number the reply states. It is the pool
+header's own `size` divided by the descriptor's `leavesPerRound`, and the
+reply's claim is then compared with it. A pool that says "this is round 900"
+over a header holding two rounds of leaves is refused at the step named `head`,
+naming both numbers. This matters because the round number is what a frontier
+is matched against, and a frontier is only evidence against the root of the
+round it stands at.
+
+### An announcement's two claims have to agree with each other
+
+An announcement carries both a block root and the round's pool header, which
+carries that round's commitment root. Those are two claims by the same party
+and they are checkable against each other for free: the block root has to fold
+to the commitment root the same message states.
+
+The client does that on a **probe** — a detached `UpperFrontier` standing where
+the view stands, built from `view.checkpoint` — so a contradiction is caught
+with nothing folded rather than reported after the fact. It is not a trust
+check and it is not a substitute for one; it catches a coordinator contradicting
+itself, which is the only lie a following wallet can catch without proving
+anything off the chain. Measured cost: **1,371 us for two rounds, 686 us a
+round**, against 204 us a round for the fold alone — a second fold, plus
+rebuilding the probe's frontier from the view's checkpoint each round. That is
+the price of catching a contradiction with nothing folded rather than after the
+fact, and at 686 us a round a year of a pool closing a round every ten minutes
+is 36 seconds of arithmetic.
+
+The premise was measured rather than assumed: the fixture's `round1.header
+.cmRoot == cm1` and `round2.header.cmRoot == cm2`, asserted in the suite, so a
+check that refuses a mismatch cannot be refusing honest announcements.
+
+### A note moves with the answer, and the rule is one sentence
+
+Five outcomes, and one rule: **a note is released only where the wallet knows
+the transfer is not in a round.**
+
+| outcome | what it means | the note |
+| --- | --- | --- |
+| `accepted` | taken, for the round it named | reserved |
+| `refused` | one of the protocol's twelve reasons | released |
+| `expired` | it sat in the inbox too long | released |
+| `unanswered` | no answer this client could attribute to it | **reserved** |
+| `unsent` | every send attempt failed | released |
+
+The note is reserved *before* the frame leaves the machine, so the window in
+which a second payment could pick the same note closes before anything is sent.
+A timeout, and a reply the client could not attribute, both leave it reserved:
+the submission may be in a round, and releasing a note on a maybe is how a
+wallet double-spends itself.
+
+A refusal's `Refusal.step` is the protocol's own `RefusalReason` name —
+`anchor`, `nullifierSpent`, `proof` and the other nine — so a journal records
+the twelve reasons under the names the protocol defines rather than under twelve
+sentences of this library's invention.
+
+### Replies are matched by id, not by which call got the bytes
+
+The client keeps a table of submissions in flight and routes every reply
+through it. A call that is handed another submission's reply completes that
+one and goes on waiting for its own; a reply for an id nobody is waiting for is
+refused naming the id, and no payment changes state. Two submissions whose
+replies cross therefore each get their own, which is what the suite does: the
+fake transport hands each call the *other* one's reply and both still come back
+right.
+
+A resend after a failed send is the **same bytes and the same id**, so a
+coordinator that took the first copy can tell it is the same submission rather
+than a second spend.
+
+### Nothing the client sends says anything about the wallet
+
+There is no method on this class that takes an address, a note, a leaf position
+or a txid, so there is no way to use it to look one up. Two things go out and
+that is all: a submission the wallet built, and a catch-up request.
+
+A block-root request names an **aligned run of `catchUpRange` rounds from round
+1** — the run the wanted round falls in — never the round the wallet wants.
+"Everything since round 4,117" would say when this wallet was last current, and
+over a few catch-ups that is a fingerprint. The suite asserts
+`PoolDescriptor.publishesRange` for every range sent across a full catch-up,
+and separately walks rounds 1 to 8 against a pool with `catchUpRange = 2` to
+show the quantisation is real: rounds 1 and 2 both ask from 1, rounds 3 and 4
+both ask from 3, and so on.
+
+It also greps every frame sent for the note's commitment, the wallet's
+diversifier, the change address's `pk_d` and both fixture txids, and finds none
+of them.
+
+### Measured (Apple M3 Pro, test parameters)
+
+| | |
+| --- | --- |
+| follow, 2 rounds | 1,371 us — 686 us a round, including the contradiction probe |
+| catch up with no state | one head proof and one frontier, 2 requests |
+| catch up holding a note at round 1 | one head proof and one block-root run, 2 requests |
+| 10,000 random and mutated frames | 9,433 refused, 567 taken, 0 unnamed |
+| 2,000 random and mutated replies | 0 unnamed |
+
+The 567 is not a hole and is asserted as such. A bend that lands in a field
+this client never acts on — the three txids, the nullifier root, the balance,
+the out hash — leaves a perfectly valid announcement, and the two fields it
+does act on have to agree with each other before anything moves. So the claim
+the suite makes is not "nothing got through" but **nothing was folded that was
+not round 1's own block root**: every one of the 567 left the view at round 1
+with round 1's real commitment root.
+
+Twenty-one distinct refusal steps were named across the 10,000.
+
+### What this does not do
+
+- **The client never fetches a transaction by txid.** An announcement's three
+  txids are carried and not used, which is why a bent one is not caught. The
+  round bytes a head proof needs come with the head proof and are checked in
+  full.
+- **`Disagreement` is reported, not resolved.** The honest recovery from a pool
+  telling two stories is for the host to decide, and it is not a decision a
+  library should make silently.
+- **The journal is group 10.** A refusal's reason is on the outcome, ready to
+  be written down; nothing writes it yet.
