@@ -217,9 +217,42 @@ up in DESIGN.md section 9.
 
 ## 11. End to end
 
-- [ ] 11.1 On the fixture's chain, run a payment end to end inside the suite: payee issues an invoice, payer builds and submits through the fake transport, the round is applied, the payer builds a payment proof, the payee checks it and acknowledges, and both journals read as one thread; verify it in `test/end_to_end_test.dart`.
-- [ ] 11.2 On localnet against ../pool-coordinator at test parameters, run the same flow over the real coordinator: two wallets, an invoice, a submission, a mined round, a delivered proof and an acknowledgement; verify the round is mined, the payee's check passes against headers from the node, and the pool view reaches the coordinator's tip, guarded by `POOL_LOCALNET=1`.
-- [ ] 11.3 Record in `docs/DESIGN.md` the end-to-end timings from 11.2 with the machine, and what is unmeasured (production parameters, which ARC's 1,636,802 byte scriptSig limit keeps off testnet).
+- [x] 11.1 On the fixture's chain, run a payment end to end inside the suite: payee issues an invoice, payer builds and submits through the fake transport, the round is applied, the payer builds a payment proof, the payee checks it and acknowledges, and both journals read as one thread; verify it in `test/end_to_end_test.dart`.
+- [x] 11.2 On localnet against ../pool-coordinator at test parameters, run the same flow over the real coordinator: two wallets, an invoice, a submission, a mined round, a delivered proof and an acknowledgement; verify the round is mined, the payee's check passes against headers from the node, and the pool view reaches the coordinator's tip, guarded by `POOL_LOCALNET=1`.
+- [x] 11.3 Record in `docs/DESIGN.md` the end-to-end timings from 11.2 with the machine, and what is unmeasured (production parameters, which ARC's 1,636,802 byte scriptSig limit keeps off testnet).
+
+**11.2 was not blocked after all.** The note in group 9 said this waited on
+`../pool-coordinator` being updated for the SPV rewrite and protocol v2. It has
+been: that repo analyzes clean and runs protocol v2, so 11.2 was built and it
+passes. libcloak now dev-depends on `pool_coordinator` — a wallet does not
+depend on the server it talks to, but its test suite does, because the only way
+to show the two agree is to run one against the other.
+
+**What the localnet run proves that the in-suite one cannot.** The in-suite run
+has one seam: the transfer libcloak builds is not in the round that gets mined,
+because assembling a round means proving an aggregation. On localnet a pool is
+issued from nothing, libcloak's own transfer goes into round 2 with three
+padding transfers around it, and `PaymentProofs.positionOf` finds the payer's
+own commitment at leaf 32 of the round the coordinator built. Measured: issue
+8.4 s, round 1 10.1 s, build 52 ms, submit 325 ms, round 2 29.3 s (20 s of it
+the coordinator's configured deadline), proof 793,300 B, check 87 ms.
+
+**Owed in `../pool-coordinator`, not here: the three catch-up messages.** The
+coordinator implements protocol v2's descriptor, submission, reply and
+announcement, and its inbox refuses anything that is not a submission
+(`grep -r CatchUp lib/` finds nothing). So `CoordinatorClient.headProof`,
+`frontier` and `blockRootsFor` are verified against a fake pool only, and the
+localnet run reaches the tip by folding the feed and checking that fold against
+a payment proof it was handed. That is the stronger path, not a workaround —
+but a wallet with no state cannot join a running pool until the coordinator
+answers those three.
+
+**The suite is two commands now.** The localnet end-to-end stands up a ricochet
+server, a coordinator and a one-per-second miner; run in the same pack as the
+rest it tripled the wall clock of every measured bound (the journal's
+10,000-entry read went 271 ms -> 1,108 ms against a 1 s bound). It is gated on
+`POOL_E2E` as well as `POOL_LOCALNET`, and two bounds now take the best of
+several readings, printing the worst beside it.
 
 ## 12. Docs and the suite
 

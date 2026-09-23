@@ -1,6 +1,4 @@
-import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:convert/convert.dart';
 import 'package:crypto/crypto.dart' as crypto;
@@ -11,6 +9,7 @@ import 'package:tstokenlib/testing.dart';
 import 'package:tstokenlib/tstokenlib.dart';
 
 import 'fakes.dart';
+import 'support/node.dart';
 
 /// **The gate.** Every payment proof this library will ever check rests on one
 /// claim: that a mined witness spending a round's PP1 and PP2, with the pool's
@@ -365,7 +364,7 @@ void main() {
 
   group('ATTACK on localnet', () {
     test('the forged round and its witness are mined, and the payee still refuses', () async {
-      final net = _Node();
+      final net = LocalNode();
       await net.ready();
 
       // Fund the forger and build the two transactions for real. The point of
@@ -408,7 +407,8 @@ void main() {
 
       // The payee is handed a payment proof built from those mined bytes, with
       // the merkle branch the node itself gives for the witness.
-      final (proof, source) = await net.proofFor(round, witness, paid);
+      final (proof, source) = await net.proofFor(round, witness,
+          roundNumber: 1, note: paid.note, position: paid.position, path: paid.path.siblings);
       final (header, whyHeader) = await HeaderChecker(source, confirmations: 1).proven(proof.blockHash!);
       expect(whyHeader, isNull, reason: 'the block really is on the chain: $whyHeader');
       expect(header!.merkleRoot, isNotNull);
@@ -427,110 +427,6 @@ void main() {
 bool _paysTo(TransactionOutput o, List<int> pkh) {
   final s = o.script.buffer;
   return s.length == 25 && s[0] == 0x76 && s[1] == 0xa9 && hex.encode(s.sublist(3, 23)) == hex.encode(pkh);
-}
-
-/// Just enough of the regtest node's RPC to mine a forgery, as ../localnet
-/// runs it. The credentials are the localnet harness's published ones and are
-/// never a real node's.
-class _Node {
-  final _uri = Uri.parse(Platform.environment['LOCALNET_RPC'] ?? 'http://localhost:18332');
-  final _http = HttpClient();
-
-  Future<dynamic> rpc(String method, [List<dynamic> params = const []]) async {
-    final req = await _http.postUrl(_uri);
-    req.headers.set('Authorization', 'Basic ${base64.encode(utf8.encode('bitcoin:bitcoin'))}');
-    req.headers.contentType = ContentType.json;
-    req.persistentConnection = false;
-    req.write(jsonEncode({'jsonrpc': '1.0', 'id': method, 'method': method, 'params': params}));
-    final res = await req.close();
-    final json = jsonDecode(await res.transform(utf8.decoder).join()) as Map<String, dynamic>;
-    if (json['error'] != null) throw StateError('$method: ${json['error']}');
-    return json['result'];
-  }
-
-  Future<void> mine([int n = 1]) async => rpc('generatetoaddress', [n, await rpc('getnewaddress')]);
-
-  Future<void> ready() async {
-    try {
-      await rpc('getblockcount');
-    } catch (e) {
-      throw StateError('No regtest node at $_uri ($e). Start ../localnet.');
-    }
-    if ((await rpc('getbalance') as num) < 2) await mine(101);
-  }
-
-  Future<Transaction> fund(Address to, BigInt sats) async {
-    final txid = await rpc('sendtoaddress', [to.toBase58(), sats.toInt() / 1e8]) as String;
-    await mine();
-    return Transaction.fromHex(await rpc('getrawtransaction', [txid, 0]) as String);
-  }
-
-  Future<void> submit(String name, Transaction tx) async {
-    await rpc('sendrawtransaction', [tx.serialize()]);
-    await mine();
-    final info = await rpc('getrawtransaction', [tx.id, 1]) as Map<String, dynamic>;
-    if ((info['confirmations'] ?? 0) < 1) throw StateError('$name ${tx.id} was accepted but not mined');
-  }
-
-  /// A standing proof built from what the node says, with a header source
-  /// answering out of the node's own block. The block is rebuilt here from
-  /// its txids so the branch is computed rather than taken on the node's word.
-  Future<(PaymentProof, FakeHeaderSource)> proofFor(Transaction round, Transaction witness,
-      ({NotePlaintext note, List<int> pkd, int position, MerklePath path}) paid) async {
-    final raw = await rpc('getrawtransaction', [witness.id, 1]) as Map<String, dynamic>;
-    final block = await rpc('getblock', [raw['blockhash']]) as Map<String, dynamic>;
-    final txids = (block['tx'] as List).cast<String>();
-    final built = _BlockFromNode(block['height'] as int, [for (final t in txids) hex.decode(t)],
-        hex.decode(block['previousblockhash'] as String), block);
-    final source = FakeHeaderSource([built]);
-    final index = txids.indexOf(witness.id);
-    final (_, branch) = built.branchFor(index);
-    return (
-      PaymentProof.standing(
-          round: 1,
-          roundTx: hex.decode(round.serialize()),
-          witnessTx: hex.decode(witness.serialize()),
-          blockHash: built.hash,
-          txIndex: index,
-          branch: branch,
-          position: paid.position,
-          path: paid.path.siblings,
-          note: NoteOpening.of(paid.note)),
-      source
-    );
-  }
-}
-
-/// A block the node really mined, with the node's own header bytes, so the
-/// hash and the merkle root the payee checks against are the chain's and not
-/// this test's arithmetic.
-class _BlockFromNode extends FakeBlock {
-  final Map<String, dynamic> raw;
-  _BlockFromNode(super.height, super.txids, super.previous, this.raw);
-
-  /// The 80 bytes, rebuilt from the fields `getblock` returns, in the order a
-  /// header carries them. The payee hashes these to get the block hash, so if
-  /// this were wrong the header check would fail and the test would say so
-  /// rather than quietly passing.
-  @override
-  List<int> get header {
-    final out = BytesBuilder(copy: false)
-      ..add(_le32(raw['version'] as int))
-      ..add(hex.decode(raw['previousblockhash'] as String).reversed.toList())
-      ..add(hex.decode(raw['merkleroot'] as String).reversed.toList())
-      ..add(_le32(raw['time'] as int))
-      ..add(_le32(int.parse(raw['bits'] as String, radix: 16)))
-      ..add(_le32(raw['nonce'] as int));
-    return out.toBytes();
-  }
-
-  @override
-  List<int> get hash => hex.decode(raw['hash'] as String);
-
-  @override
-  List<int> get merkleRoot => hex.decode(raw['merkleroot'] as String);
-
-  static List<int> _le32(int v) => Uint8List(4)..buffer.asByteData().setUint32(0, v, Endian.little);
 }
 
 /// A small deterministic generator, so a failing mutation can be reproduced.

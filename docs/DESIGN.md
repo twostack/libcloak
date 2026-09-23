@@ -1009,3 +1009,110 @@ what you paid must not quietly lose a line.
 - **Nothing writes entries for you.** The journal records what it is handed.
   Wiring it into the payment path is group 11's business, not a side effect
   buried in `PaymentBuilder`.
+
+## 10. End to end (2026-09-23)
+
+Two runs of the same flow. `test/end_to_end_test.dart` against a fake pool, in
+seconds, in every suite. `test/localnet_e2e_test.dart` against a pool issued on
+localnet and a real `../pool-coordinator` over ricochet, in about 70 seconds,
+asked for on its own.
+
+### The seam the second one closes
+
+The in-suite run has one: the transfer libcloak builds is **not** in the round
+that gets mined, because assembling a round means proving an aggregation and
+that is the coordinator's job. So there the proof handed to the payee is of the
+note the fixture's round 2 really holds at the invoice's address.
+
+On localnet there is no seam. A pool is issued from nothing, a coordinator runs
+it, libcloak's own transfer goes into round 2 with three padding transfers
+around it, the round is mined, and `PaymentProofs.positionOf` finds the payer's
+own commitment in it at leaf 32. The proof the payee checks comes out of the
+round the coordinator built.
+
+That is also the strongest statement this change can make about the two
+libraries agreeing: the wallet's `PoolDescriptor`, its block-root fold, its
+`PoolSubmission` and its `PaymentProof` were all read and written by code in
+the other repo, and every check passed against a chain neither of them wrote.
+
+### Measured (Apple M3 Pro, test parameters, regtest localnet)
+
+| | in the suite | on localnet |
+| --- | --- | --- |
+| issue a pool from nothing | — | 8,362 ms |
+| round 1, four transfers, submitted to announced | — | 10,122 ms |
+| build a payment (a spend proof) | 284 ms | 52 ms |
+| submit and be answered | 13 ms | 325 ms |
+| round 2, one real transfer and three padding, submitted to announced | — | 29,302 ms |
+| the standing proof | 793,304 B | 793,300 B |
+| the payee's check | 71 ms | 87 ms |
+| the acknowledgement | 94 B | 94 B |
+| the whole run, invoice to acknowledgement | 602 ms | — |
+
+Round 2's 29 s is 20 s of the coordinator's configured round deadline — the
+round waits for transfers that never come and then pads — plus about 9 s of
+proving and mining. It is a measurement of the coordinator's settings, not of
+the wallet.
+
+The payment proof is 793 KB because it carries the round transaction and the
+witness whole, and the witness carries the pool's STARK. That is the price of a
+proof that needs nothing looked up. The short form, for a payee that follows
+the pool, is 1,098 bytes — a factor of 722 — and is measured in section 7.
+
+### What is unmeasured
+
+- **Production parameters.** The pool this runs on is the four-transfer test
+  plan. A production round is 256 transfers and its witness is megabytes;
+  ARC's scriptSig limit of 1,636,802 bytes is where a production witness
+  stalls, so it cannot go on testnet and has not been run end to end here. The
+  numbers above do not extrapolate: the spend proof is the same size at both
+  (the wallet proves one transfer either way), but the round transaction and
+  therefore the standing proof are not.
+- **A pool with real traffic.** Round 2 closed on its deadline with three
+  padding transfers. A busy pool closes on capacity and pays no padding, which
+  is faster per transfer and cheaper per round, and is not measured.
+- **The transport under loss.** Ricochet ran on one machine over loopback.
+
+### The suite is two commands
+
+The localnet run stands up a ricochet server, a coordinator and a
+one-per-second miner, and proves two rounds. In the same pack as the rest it
+triples the wall clock of every measured bound in the suite, and those are
+bounds on one core: the journal's 10,000-entry read went from 271 ms to
+1,108 ms and failed its own 1 s bound, which is a fact about the machine and
+not about the journal. So it is asked for rather than swept up:
+
+```
+dart test                                         the suite
+POOL_LOCALNET=1 dart test                         with the localnet attack
+POOL_LOCALNET=1 POOL_E2E=1 dart test test/localnet_e2e_test.dart
+```
+
+Bounds that are read off a loaded machine now take the best of several
+readings, because interference can only make a reading longer: the payee's
+check (best of 7), the note store's balance (best of 7) and the journal's read
+(best of 15). Each prints the worst beside the best, and the note store prints
+its first reading separately — 3.2 ms cold against 0.3 ms warm — because the
+cold one is what a wallet pays when it opens.
+
+The journal's fifteen is not five because the readings are contended by **the
+test's own writeback**: it has just written ten thousand fsynced files, which
+takes 1.8 s alone and 13 s inside the suite, and the first readings queue behind
+that. Five readings stay inside the storm and the test failed about one run in
+three; fifteen outlast it, and three consecutive suite runs measured 482, 474
+and 495 ms against the 1 s bound.
+
+### What the coordinator does not do yet
+
+`../pool-coordinator` implements protocol version 2's descriptor, submission,
+reply and announcement, and **not** its three catch-up messages: its inbox
+refuses anything that is not a submission. So `CoordinatorClient.headProof`,
+`frontier` and `blockRootsFor` are verified against a fake pool and not against
+the real one, and the localnet run reaches the coordinator's tip by folding the
+feed's announcements and checking the fold against a payment proof it was
+handed rather than against a head proof it asked for.
+
+That is not a hole in the wallet — checking a fold against a proof somebody
+handed you is the "people pay people" path, and is stronger than asking a
+server — but it is work owed in the coordinator repo before a wallet with no
+state can join a running pool without reading its whole feed.

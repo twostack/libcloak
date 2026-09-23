@@ -1,0 +1,5 @@
+tags:
+  # Needs ../localnet up (a regtest node and PostgreSQL) and a built
+  # ../go-ricochet/ricochet.
+  localnet:
+    timeout: 30m
