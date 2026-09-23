@@ -1116,3 +1116,269 @@ That is not a hole in the wallet — checking a fold against a proof somebody
 handed you is the "people pay people" path, and is stronger than asking a
 server — but it is work owed in the coordinator repo before a wallet with no
 state can join a running pool without reading its whole feed.
+
+## 11. The library, as built (2026-09-24)
+
+Sections 1 to 10 are the record of building each piece. This one is the whole
+of it in one place, for a reader who has not read them.
+
+### Two ports, and nothing else touches the world
+
+libcloak is headless: no daemon, no sockets, no UI, no database. It reaches
+outside itself through two interfaces the host implements.
+
+| port | what it answers | what it cannot be asked |
+|---|---|---|
+| `HeaderSource` | the chain tip; the height of a block hash, or null when it is not on the accepted chain; the 80-byte header at a height | anything naming an address, an outpoint or a wallet-derived txid — there is no method |
+| `Transport` | send a frame and get a reply; read the pool's feed from a sequence number | the same — a frame is opaque bytes, and what goes in them is a transfer the wallet built or a question from a published set |
+
+The narrowness *is* the privacy property. A port with no method that takes an
+address cannot leak one, and that is a stronger statement than a rule about how
+callers should use it. The suite asserts it twice: `test/fakes_test.dart`
+checks the declared surface, and the end-to-end runs grep every frame sent for
+the note's commitment, the wallet's diversifier, the change address's key and
+both fixture txids.
+
+### How a note stays spendable: 32 bytes a round
+
+The pool's commitment tree is depth 32. A round appends a fixed **power of two**
+block of leaves — 512 at production, 32 at test — so round N owns exactly the
+aligned node at level `log2(block)`, index `N - 1`. That splits a note's 32
+siblings in two:
+
+| | production | test | |
+|---|---|---|---|
+| below the block level | 9 | 5 | frozen once the note's own round is mined |
+| above it | 23 | 27 | folded forward, one 32-byte block root a round |
+
+So a wallet keeps, per note, its position and its frozen lower siblings; and per
+wallet, one upper frontier. Following costs **32 bytes a round whatever it
+holds**, against 16,384 if it followed every commitment.
+
+The power of two is not tidiness. At any other count a round's leaves straddle
+two subtrees, a round owns no node, and following the pool by one root a round
+is not a thing that can be done. `PoolShape.of` refuses a non-power-of-two and
+says so.
+
+**The invariant.** Folding is arithmetic; it becomes evidence when the root it
+computes equals the `cmRoot` of a round the wallet proved off the chain for
+itself. A wrong root, or a skipped round, fails that check. So the 32 bytes can
+come from anyone — and a wallet may fold a thousand rounds from a stranger and
+check once at the end, because a wrong block root anywhere in a run makes the
+root at the end of the run wrong too.
+
+What it may **not** do is spend from an unchecked fold. That is why a
+`PoolView` carries two numbers, `round` and `checkedTo`, and why `spendPath`
+refuses while they differ.
+
+Three things follow from the same arithmetic and are worth stating because each
+looks like a special case and is not:
+
+- **A verified payment path is a frontier.** A note's lower siblings and its
+  leaf give its block's root; its upper siblings at the levels where the block
+  index has a bit set are exactly the `left` nodes a fold needs. So
+  `PoolView.resume` is free, and a path that arrives a few rounds late is
+  brought forward by replaying the retained block roots.
+- **A checkpoint cannot bring an existing note's path up to date.** A frontier
+  says where the tree stands and says nothing about the rounds a particular
+  leaf's siblings missed. `restoreTo` therefore **freezes** held notes rather
+  than dropping or silently updating them, and `spendPath` refuses a frozen note
+  naming the first round that was never folded into it.
+- **Nullifiers are computed and dropped.** `nk` is an argument to
+  `NoteStore.settle`, never a field. A store that cached nullifiers would hand
+  whoever read the file the wallet's spending history.
+
+### A payment, end to end
+
+```
+payee                                   payer
+  |  Invoice.issue ─── bytes ──────────►  Invoice.read: pool, expiry, signature
+  |                                       PoolView: fold, check, spendPath
+  |                                       NoteStore.choose: one note
+  |                                       PaymentBuilder.build ──► a spend proof
+  |                                       CoordinatorClient.submit
+  |                                    ◄── accepted into round N; note reserved
+  |                                       follow the feed, fold round N
+  |  PaymentChecker.check ◄─ proof ────── PaymentProofs.standing/short
+  |  NoteStore.take
+  |  Acknowledgement.of ─── bytes ─────►  Acknowledgement.check(invoice)
+```
+
+Two rules run through it. **People pay people:** the payer hands the payee a
+proof and the payee checks it against headers it already holds; nobody scans a
+chain, and the library asks no server what it owns. **Nothing is taken on
+trust:** every answer a pool gives is checked against something the wallet
+proved for itself.
+
+An invoice is signed under an Ed25519 key derived from
+`SHA256("tsl1-libcloak/invoice/1" ‖ ivk ‖ d)` — one per address, because one per
+wallet would make invoices linkable. It catches a substituted address, a changed
+amount and an altered expiry. It does **not** catch a full man-in-the-middle who
+replaces the key and the signature too; that is what handing the invoice over a
+channel the payer already trusts is for.
+
+An acknowledgement's clock is the **block's own timestamp**, which is the only
+clock in the exchange the payer did not supply.
+
+### What a payee checks, in order
+
+The order is the contract, because a refusal names the step and a person acts on
+that name.
+
+1. the encoding and its bounds — done when the proof was decoded;
+2. the witness is in a block this wallet's own source vouches for, by its merkle
+   branch, buried deep enough;
+3. the witness spends the round's PP1 and PP2;
+4. **the PP1 is a real PP1_SP script** carrying the descriptor's tokenId and
+   genesis header, and its pool header parses;
+5. the opening commits under the payee's own `pk_d`;
+6. the path takes that commitment to the round's commitment root at the stated
+   position.
+
+Steps 3 to 6 are tstokenlib's `PoolEvidence`, on purpose: they are rules about
+the pool and they belong beside the pool, so the coordinator and the wallet
+cannot drift apart.
+
+Step 4 is the one the whole thing turns on. A reader that parses PP1 by fixed
+offset sees a forgery's own account of itself: a script with the pool's tokenId
+at the right offset over a body that enforces nothing reads as genuine. The
+check regenerates the script from the fields it parsed and requires it to be
+byte-identical. Section 1 records the attack mined on a real regtest node, and
+it is still refused at the step named `PP1 is this pool's script`.
+
+Nothing here verifies a STARK. The round was mined, which means the chain ran
+the pool's verifier over it.
+
+### The formats, and what they cost
+
+Every one is versioned, every length is explicit, and an unknown version is
+refused naming it rather than guessed at.
+
+| | bytes | bound |
+|---|---|---|
+| address (hybrid X25519 + ML-KEM-768) | 1,261 | — |
+| invoice, 256-byte memo | 1,687 | 2 KB |
+| invoice, memo full | 1,943 | 2 KB |
+| acknowledgement | 94 | — |
+| a transfer | 14,812 | — |
+| **standing** payment proof | 793,304 | 1 MB |
+| **short** payment proof | 1,098 | 4 KB |
+| checkpoint, round 1,000 | 295 (8 nodes) | worst 775 (23 nodes) |
+| pool view state, per note | 1,069 | — |
+| note store, per note | 73 | — |
+| journal entry | 142 | 1,024 |
+
+The factor of **722** between the two proof forms is what a payee buys by
+following the pool for 32 bytes a round. It is the same proof: the same
+commitment and path checks, against a root the payee's own fold produced rather
+than one inside the message. The short form carries **no** commitment root and
+must not — that root is the one thing it has no evidence for.
+
+### The six decisions, as settled
+
+| | decision | how it turned out |
+|---|---|---|
+| D1 | notes stay spendable by following **block roots**, 32 B a round | Built and measured: 1,000 rounds in 189 ms, and the cost does not move with the number of notes held. |
+| D2 | the SPV core is **extracted** from libspiffy into a package both depend on | Not done, and not needed here: libcloak depends on `HeaderSource`, and the extraction implements it. Still owed. |
+| D3 | message **formats** here, **checks** in tstokenlib | Held. The payee's checks are `PoolEvidence`; the envelope, expiry and signature are libcloak's. |
+| D4 | the journal is **files** | Held, and the index the design sketched was measured away: batches of eight read 10,000 entries in 271 ms against a 1 s bound. |
+| D5 | transparent scope is **pool-only** | Held. Deposits and withdrawals are `libcloak-onramp`. |
+| D6 | the **coordinator delivers** proven rounds to submitters, and puts block roots on the feed | Half: the feed carries block roots and libcloak folds them. Delivery to submitters, and the three catch-up messages, are not built in `../pool-coordinator` yet. |
+
+### Every measurement, groups 4 to 11
+
+Apple M3 Pro, test parameters unless the row says otherwise. A bound in bold is
+one the spec sets.
+
+**The pool view** (production shape: 512 leaves a round, 1,000 rounds)
+
+| | |
+|---|---|
+| catch up 1,000 rounds holding 8 notes | 189 ms (**2 s**), 189 µs a round |
+| the same holding 0 / 1 / 100 notes | 203 / 189 / 201 ms |
+| the feed for those 1,000 rounds | 32,000 B |
+| stored state, 100 notes | 106,988 B (**200 KB**) |
+| reopening it | 2.1 ms |
+| joining from a checkpoint | 0.26 ms |
+| 10,000 mutated roots, paths, positions | 0 accepted, 0 unnamed |
+
+**Notes**
+
+| | |
+|---|---|
+| 10,000 notes stored | 730,010 B (**4 MB**) |
+| a balance over them | 0.3 ms warm, 3.2 ms on the first reading (**10 ms**) |
+| encoding them | 10 ms |
+| `settle` over them | 94 ms — one Poseidon2 hash a note |
+
+**Invoices**
+
+| | |
+|---|---|
+| 10,000 mutated invoices | 7,823 parsed, 1 still verified (a flip that flipped back), 7,440 refused at the signature, 0 unnamed |
+
+**Payments**
+
+| | |
+|---|---|
+| the wallet's own build work | 8 ms (**200 ms**) |
+| the spend proof beside it | 118 ms |
+| checking a standing proof | 63.7 ms best of 7 (**100 ms**; 176 ms under a loaded suite) |
+
+**The coordinator client**
+
+| | |
+|---|---|
+| following the feed | 686 µs a round — 204 µs fold, the rest the contradiction probe |
+| catch up with no state | 2 requests (a head proof and a frontier) |
+| catch up holding a note | 2 requests (a head proof and one published run) |
+| 10,000 random and mutated frames | 9,433 refused, 567 taken, **0 unnamed**, 21 distinct steps |
+| 2,000 random and mutated replies | 0 unnamed |
+
+The 567 is not a hole. A bend that lands in a field the client never acts on —
+the three txids, the nullifier root, the balance, the out hash — leaves a
+perfectly valid announcement, and the two fields it does act on must agree with
+each other before anything moves. Every one of the 567 folded round 1's real
+block root and reached round 1's real `cmRoot`, which is what the suite asserts.
+
+**The journal**
+
+| | |
+|---|---|
+| 10,000 entries written (temp-then-rename, flushed) | 1,814 ms — 182 µs each |
+| 10,000 entries read | 286 ms best of 15 (**1 s**), 482 ms inside the suite |
+| the same read one file at a time | 658 ms |
+| 1,000 mutated entries | 221 read, 779 refused, **0 unnamed**, 17 steps |
+
+**End to end**
+
+| | in the suite | on localnet, real coordinator |
+|---|---|---|
+| issue a pool from nothing | — | 8,362 ms |
+| round 1, four transfers | — | 10,122 ms |
+| build a payment | 284 ms | 52 ms |
+| submit and be answered | 13 ms | 325 ms |
+| round 2, one real transfer and three padding | — | 29,302 ms |
+| the payee's check | 71 ms | 87 ms |
+| the whole run, invoice to acknowledgement | 602 ms | — |
+
+### What is owed
+
+- **The three catch-up messages in `../pool-coordinator`.** It runs protocol
+  version 2's descriptor, submission, reply and announcement, and its inbox
+  refuses anything that is not a submission. Until it answers a head proof, a
+  frontier and a run of block roots, a wallet with **no state** cannot join a
+  running pool without reading its whole feed. The wallet side is built and
+  verified against a fake pool.
+- **Delivery of proven rounds to submitters** (D6's other half). A payer today
+  learns its transfer landed by reading the feed and then fetching the round;
+  the coordinator already holds the reply channel and could hand it over.
+- **The SPV extraction** (D2), so `HeaderSource` has an implementation that is
+  not a test fake or a node's RPC.
+- **`libcloak-onramp`**: deposits, withdrawals, and restore from a seed —
+  which is the one place the no-scanning rule does not apply and deserves its
+  own thinking rather than being bolted on here.
+- **Production parameters end to end.** ARC caps a scriptSig at 1,636,802 bytes
+  and a production witness is larger, so it cannot go on testnet. The numbers
+  above do not extrapolate: the spend proof is the same size at both, the round
+  transaction and therefore the standing proof are not.

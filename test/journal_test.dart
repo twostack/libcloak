@@ -617,13 +617,21 @@ void main() {
     }
     write.stop();
 
-    var best = 0;
+    // The bound is on one core and `dart test` runs files in parallel, so this
+    // is the best of fifteen: interference can only make a reading longer,
+    // never shorter, so the minimum is the honest estimate of one core's cost.
+    // Fifteen and not five because the first readings are contended by this
+    // test's own writeback — ten thousand fsynced files ahead of them — and
+    // the run has to be long enough for that to drain.
+    var best = 0, worst = 0;
     JournalRead? read;
-    for (int run = 0; run < 3; run++) {
+    for (int run = 0; run < 15; run++) {
       final w = Stopwatch()..start();
       read = await j.read();
       w.stop();
-      if (best == 0 || w.elapsedMilliseconds < best) best = w.elapsedMilliseconds;
+      final ms = w.elapsedMilliseconds;
+      if (best == 0 || ms < best) best = ms;
+      if (ms > worst) worst = ms;
     }
     expect(read!.whole, isTrue, reason: '${read.refused.take(3)}');
     expect(read.entries.length, 10000);
@@ -631,7 +639,7 @@ void main() {
     expect(read.entries.last.sequence, 10000);
     final size = read.entries.first.encode().length;
     print('10,000 entries: written in ${write.elapsedMilliseconds} ms, '
-        'read in $best ms (best of 3), $size bytes an entry');
+        'read in $best ms (best of 15, worst $worst), $size bytes an entry');
     expect(best, lessThan(1000));
   }, timeout: const Timeout(Duration(minutes: 3)));
 

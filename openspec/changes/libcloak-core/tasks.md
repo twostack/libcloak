@@ -91,6 +91,12 @@ what brings a path that arrives a few rounds late forward. Measured at
 production shape: 1,000 rounds holding 8 notes in 189 ms (bound 2 s) and a
 100-note state in 106,988 B (bound 200 KB); see `docs/DESIGN.md` section 4.
 
+**Scenarios the group's tasks do not name, verified in `test/pool_view_test.dart`.**
+"A wallet joins at the head", "A frontier that does not reproduce the root",
+"A note across a checkpoint" and "A wallet with no notes rejoins cheaply" are in
+the pool-view spec's checkpoint requirements and in none of 5.1 to 5.7. They are
+done, one test each under its own name.
+
 ## 6. Notes
 
 - [x] 6.1 Implement `note.dart` and `note_store.dart`: the three states, the fields recorded, the reservation rule, and the versioned stored form; verify note-store "A note through its states", "A refused submission releases the note", "A second payment on the same note", "A note without a checked proof", "Two stores agree" and "A truncated store".
@@ -127,6 +133,10 @@ and `fromMillisecondsSinceEpoch` returns local, so an expiry did not survive its
 own codec; it is normalised to UTC now. Measured: 1,687 B with a 256-byte memo
 and 1,943 B with the memo full, both under the 2 KB bound.
 
+**Scenarios the group's tasks do not name, verified in `test/invoice_test.dart`.**
+"Another pool's invoice" is the whole of the spec's "An invoice names one pool"
+requirement and is named by no task. Done, under its own name.
+
 ## 8. Payments
 
 - [x] 8.1 Implement `builder.dart`: an invoice and a note to a `ShieldedTransfer` through tstokenlib, with the path from the view; verify payments "A payment on the fixture's chain", "Not enough in the note" and "An expired invoice".
@@ -149,6 +159,12 @@ Measured: build work 8 ms beside a 118 ms proof, standing proof 793,304 B
 checked in 63 ms, short proof 1,098 B — a factor of 722. "Mutated payment
 proofs" and "A round with a forged lineage" are the runs already in
 `test/lineage_attack_test.dart`; submitting is task 9.2.
+
+**Scenarios the group's tasks do not name, verified in `test/payment_test.dart`.**
+The short form's five: "A short proof into a folded round",
+"A short proof for a round not folded", "The payer falls back",
+"Size of the short form" and "A short proof naming its own root".
+Done, one test each under its own name.
 
 ## 9. The coordinator client
 
@@ -256,6 +272,47 @@ several readings, printing the worst beside it.
 
 ## 12. Docs and the suite
 
-- [ ] 12.1 Write the dated section in `docs/DESIGN.md`: the ports, the block-root following and its invariant, the payment flow and the payee's checks, the message formats with their sizes, the decisions D1 to D6 as settled, and every measurement from groups 4 to 11.
-- [ ] 12.2 Run `dart analyze lib test` (0 errors) and the full suite (`dart test`), and report the counts.
-- [ ] 12.3 Write the journal entry in ../openspec-practice recording anything this change taught about the conventions.
+- [x] 12.1 Write the dated section in `docs/DESIGN.md`: the ports, the block-root following and its invariant, the payment flow and the payee's checks, the message formats with their sizes, the decisions D1 to D6 as settled, and every measurement from groups 4 to 11.
+- [x] 12.2 Run `dart analyze lib test` (0 errors) and the full suite (`dart test`), and report the counts.
+- [x] 12.3 Write the journal entry in ../openspec-practice recording anything this change taught about the conventions.
+
+**12.2, the counts.** `dart analyze lib test` — 0 issues in libcloak, 0 errors
+in tstokenlib. The suite is three commands, for reasons recorded in
+`docs/DESIGN.md` section 10:
+
+| | |
+|---|---|
+| `dart test` | **214 passed, 3 skipped** in 2m18s |
+| `POOL_LOCALNET=1 dart test` | **215 passed, 2 skipped** in 2m16s |
+| `POOL_LOCALNET=1 POOL_E2E=1 dart test test/localnet_e2e_test.dart` | **2 passed** in 1m16s |
+
+219 tests in 13 files. The skips are the localnet ones: the mined lineage
+forgery, and the two end-to-end tests against the real coordinator.
+
+**12.3 produced three journal entries and a check, in `../openspec-practice`.**
+The first is the one worth acting on, and it is measured rather than asserted:
+against the task list **as first written**, 15 of this change's 118 scenarios
+(13%), across four of nine capabilities, were named by no task at all. Five of
+them were the whole of coordinator-client's "Catching up" requirement, which is
+what "A wallet with no state becomes current" rests on and which needed a head
+proof the library did not have.
+
+`snippets/scenario-coverage.py` is that measurement as a check anyone can run
+before apply starts:
+
+```
+python3 ../openspec-practice/snippets/scenario-coverage.py openspec/changes/libcloak-core
+118 scenarios, 0 named by no task (0%)
+```
+
+It reads zero now because the group notes above name every scenario that was
+built without a task asking for it. The other two entries are the per-core
+measurement problem (a bound and a parallel suite are different machines) and
+treating a design document's open-question answer as a hypothesis to measure
+rather than a decision to implement — which is how the journal's index file
+came to be measured away.
+
+**Not promoted to `conventions.md`.** The practice folder's own rule is that a
+lesson moves from `journal/` to `conventions.md` once it holds across more than
+one change. All three come from this one change, so they stay entries. The
+coverage check is in `snippets/` and can be run today regardless.
