@@ -188,8 +188,32 @@ protocol's own name, and nothing writes it down yet; the journal is group 10.
 
 ## 10. The journal
 
-- [ ] 10.1 Implement `journal.dart` and `entry.dart`: versioned entries under an invoice id, temporary-name-then-rename writes, corrections as new entries; verify journal "One payment, one thread", "A refusal is kept", "An entry cut short", "A correction" and "A write that fails".
-- [ ] 10.2 Verify journal "Mutated journal files" (1,000 mutated), "Unknown entry version" and "Nothing secret in the journal"; measure 10,000 entries, verify "Ten thousand entries" (under 1 s) and record it in `docs/DESIGN.md`.
+- [x] 10.1 Implement `journal.dart` and `entry.dart`: versioned entries under an invoice id, temporary-name-then-rename writes, corrections as new entries; verify journal "One payment, one thread", "A refusal is kept", "An entry cut short", "A correction" and "A write that fails".
+- [x] 10.2 Verify journal "Mutated journal files" (1,000 mutated), "Unknown entry version" and "Nothing secret in the journal"; measure 10,000 entries, verify "Ten thousand entries" (under 1 s) and record it in `docs/DESIGN.md`.
+
+**The index in design.md was measured away.** design.md's open-question table
+suggested "keep an index file beside the entries" to make the 10,000-entry read
+fit under 1 s. Measured on an M3 Pro: one file at a time is 658 ms, eight at a
+time is **224 ms**, and past eight it gets worse again. So the journal reads in
+batches of eight and keeps no index, which leaves nothing that can go stale.
+Final numbers with decoding: 10,000 entries written in 1,819 ms and read in
+**307 ms**, 142 bytes an entry.
+
+**Not deferred, done here:** "One payment, one thread" is a real end-to-end run
+on the fixture's chain — invoice issued, payment built by libcloak, submitted
+through `CoordinatorClient` to a fake coordinator, accepted, a standing proof
+built off round 2, checked by the payee, acknowledged, and the acknowledgement
+checked by the payer — recorded in two journals, six entries on the payer's
+side and three on the payee's, all under one invoice id. Group 11's end-to-end
+is the same run against `../pool-coordinator` rather than a fake.
+
+**A deliberate non-goal, stated rather than hidden:** the journal is **not
+tamper-evident**. 221 of the 1,000 mutations still read, because a bend in an
+amount or in a sentence makes a well-formed entry. The spec's threat model is a
+file that may have been edited and its answer is to refuse what does not parse;
+an unkeyed checksum is recomputable by whoever edited the file, and a keyed one
+puts a key in the one part of the wallet that is supposed to hold none. Written
+up in DESIGN.md section 9.
 
 ## 11. End to end
 

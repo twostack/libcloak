@@ -906,3 +906,106 @@ Twenty-one distinct refusal steps were named across the 10,000.
   library should make silently.
 - **The journal is group 10.** A refusal's reason is on the outcome, ready to
   be written down; nothing writes it yet.
+
+## 9. The journal (2026-09-23)
+
+The wallet's record of what it promised, paid, proved and acknowledged.
+`lib/src/journal/entry.dart` and `lib/src/journal/journal.dart`.
+
+### One file per entry, and no index
+
+The spec's shape is fixed by one sentence — "each entry written to a temporary
+name and renamed, so an entry is either whole or absent" — which is a statement
+about a file per entry. A crash half way through a write leaves a `.tmp` beside
+the journal and no entry, which is the honest outcome, and the reader treats a
+leftover `.tmp` as the "absent" half rather than as a fault.
+
+design.md sketched an index file beside the entries so the 10,000-entry read
+would fit its 1 s bound. **Measured, it is not needed.** Reading 10,000 entry
+files one at a time is 658 ms; in batches of eight it is 224 ms, because the
+cost is syscall latency and not bandwidth. Past eight it gets worse again
+(32 -> 283 ms, 128 -> 433 ms, 512 -> 494 ms). So the journal reads in batches of
+eight and keeps no index, which leaves nothing to go stale: a journal small
+enough to read whole is a journal that cannot disagree with itself.
+
+The names carry the sequence, zero-padded to nine digits, so a directory
+listing sorts into the order the entries happened. The **directory** is made
+owner-only; the entry files are not chmodded one by one, because that is a
+process spawn per entry and a directory nobody else can traverse is the same
+protection at 1/10,000th the cost.
+
+### Nine kinds and one shape
+
+A payment has six moments — the invoice, the build, the submission, the reply,
+the proof and the acknowledgement — and three of those have two sides. "I
+issued this invoice" and "I was handed this invoice" are different facts about
+the same bytes, so they are different kinds; that is nine.
+
+Every kind writes into the same fields: a sequence, a time, the invoice id, an
+optional `corrects`, an amount, a round, an optional leaf position, three short
+strings and a public reference. One shape rather than nine is what lets a
+journal be counted — how many refusals, of which reason, against which invoice
+— without nine parsers.
+
+Two details that are not arbitrary:
+
+- **`position` is nullable, not zero-when-absent.** Leaf zero is a real leaf,
+  and the fixture's first note is in it.
+- **`reason` is a field, not a phrase inside the sentence.** A coordinator's
+  refusal records the protocol's own `RefusalReason` name — `anchor`,
+  `nullifierSpent`, `proof` — so the twelve can be counted rather than
+  grepped. The suite drives all twelve through a real `CoordinatorClient`
+  against a fake coordinator and checks each lands under its own name.
+
+### Secrets stay out by construction
+
+There is no field an entry could hold a key in, and the constructors take the
+whole object — a `BuiltPayment`, a `PaymentProof`, an `Acknowledgement` — and
+write a handful of numbers out of it. So a caller cannot put a secret in by
+mistake either, which is a stronger property than a rule about what callers
+should pass.
+
+The suite writes a full end-to-end payment's journal and searches every byte of
+it for ten secrets: both wallets' `sk`, `ivk`, `ovk` and `nk`, the spent note's
+`rho` and `rcm`, the paid note's, the change note's, and a seeded wallet's
+seed. None of them is there. Values, leaf positions and invoice contents are,
+and are meant to be: they are the wallet's own business and the note store
+already holds them.
+
+### A correction is a new entry
+
+`JournalEntry.correcting(earlier)` sets `corrects` to the earlier entry's
+sequence. Nothing is rewritten and nothing is deleted, so what was believed at
+the time survives beside what replaced it — the suite checks a proof recorded
+**refused** because the wallet had no headers that far back, then recorded
+**paid** once it did, and then re-reads the first entry off the disk to show it
+still says refused.
+
+A sequence with no file at all is reported as `missing`: the journal never
+deletes an entry, so if one is gone somebody outside took it, and a record of
+what you paid must not quietly lose a line.
+
+### Measured (Apple M3 Pro, test parameters)
+
+| | |
+| --- | --- |
+| an entry | 142 bytes |
+| 10,000 entries written, temp-then-rename with flush | 1,814 ms (182 us each) |
+| 10,000 entries read, quiet machine | **286 ms**, best of 15 (worst 334), against a 1 s bound |
+| the same inside the full parallel suite | 482 ms best of 15, worst 1,858 |
+| the same read, one file at a time (probe) | 658 ms |
+| 1,000 mutated entries | 221 read, 779 refused, **0 unnamed**, 17 distinct steps |
+
+### What this does not do
+
+- **The journal is not tamper-evident, on purpose.** The spec's threat model is
+  a file that "may have been edited", and the answer to that is to refuse what
+  does not parse, not to authenticate what does. 221 of the 1,000 mutations
+  still read, and they should: a bend in an amount or in the sentence produces
+  a perfectly well-formed entry. A checksum would not change this — an
+  unkeyed one is recomputable by whoever edited the file, and a keyed one puts
+  a key in reach of the one part of the wallet that is supposed to hold none.
+  A host that needs tamper-evidence signs the directory from outside.
+- **Nothing writes entries for you.** The journal records what it is handed.
+  Wiring it into the payment path is group 11's business, not a side effect
+  buried in `PaymentBuilder`.
