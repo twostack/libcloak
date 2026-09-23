@@ -2,13 +2,13 @@
 
 The wallet library for the TSL1_SP shielded pool.
 
-libcloak holds keys, notes and their proofs for one person. It is headless: no
-UI, no daemon, no network of its own. A host (a CLI, an app, a server) supplies
-a transport and a source of block headers; libcloak supplies everything else.
+libcloak holds keys, notes and their proofs for one person. It is a headless library and
+as such has no UI, no daemon or network of its own. A host (a CLI, an app, a server) supplies
+a transport and a source of block headers.
 
 ## What it is for
 
-People paying people. A payment is made in consideration of something, so the
+P2P Payments. A payment is made in consideration of something, so the
 payer has to be able to *show* that it was made:
 
 1. the payee writes an **invoice** naming a fresh address,
@@ -20,11 +20,11 @@ payer has to be able to *show* that it was made:
 
 ## What it does not do
 
-It does not scan a chain, and it does not ask anyone to look anything up by
-address, txid or outpoint. Those are the habits of a small-block world with no
-payer-to-payee channel; here there is one, and everything a payee needs arrives
-over it with the payment. The single exception is restoring a wallet from its
-seed, where there is no one to ask.
+It does no blockchain scanning, and it does not perform lookups for
+addresses, txids or outpoints. Those are the habits that run counter to
+SPV (Simplified Payment Verification). Everything a payee needs arrives
+over a P2P comms channel along with the payment. The single exception is restoring a wallet from its
+seed.
 
 ## Status
 
