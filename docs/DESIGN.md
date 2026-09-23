@@ -438,3 +438,123 @@ The state file is written owner-only and holds no key and no seed. What it does
 say is *which* commitments are this wallet's, and that link is the thing worth
 protecting; encrypting it belongs with the note store in group 6, where the
 memos and the viewing keys live, rather than half here.
+
+## 5. Notes: the wallet's own bookkeeping (2026-09-23)
+
+Nothing in the note store was found by looking. Every note in it arrived with a
+payment proof that checked out, or was the wallet's own change out of a round it
+had already seen. There is no third way in, and that is enforced by the type
+rather than by a rule: `NoteStore.take` accepts a `CheckedPayment`, whose
+constructor is private to `checker.dart`, so an unchecked proof has nothing to
+hand over.
+
+### The three states, and the one that looks backwards
+
+**Proven**, **reserved**, **spent**. A note is reserved when a submission
+spending it is accepted, and reserved before anything expensive happens — which
+is what stops two payments being built against one note. The second attempt is
+refused naming the leaf and the state, and no proof is computed.
+
+Reserved back to proven is the only move that looks like going backwards and it
+is not: it means the pool refused the submission, so the note was never spent.
+Spent is final, because what made it spent is a nullifier in a mined round and
+no wallet gets a vote on that.
+
+The fixture puts a note through all three without anything being staged. Its
+round 1 pays the wallet 500 at leaf 0; round 2 inserts exactly that note's
+nullifier and pays 200 back at leaf 32. So `settle` is tested against the real
+round's own insertions.
+
+### Nullifiers are computed and dropped
+
+The store records value, `rho`, `rcm`, asset, diversifier, leaf and round — and
+**not** the nullifier. `nk` is an argument to `settle`, never a field, so the
+store computes `H(nk, rho)`, compares it against what a round inserted, and
+keeps neither the key nor the answer. A store that cached nullifiers would be a
+file that hands whoever reads it the wallet's spending history in advance.
+
+The test does not take this on trust: it saves the store, reads the file back,
+and searches the bytes for the note's nullifier in every shape it could have
+been written in, lane by lane, and for `nk` itself.
+
+That rule has a price, and it is written down below: recognising spends costs
+one hash per held note per round seen.
+
+### Three lines, never one number
+
+A single total is a lie of omission. The two things that stop a payment being
+made are money already in flight and money whose path the view can no longer
+anchor, and a total hides both behind a number that looks spendable. So the
+balance is **spendable**, **reserved** and **stale**, and stale carries how far
+behind the view is — which turns "you cannot pay" into "fold some block roots",
+a thing the wallet can do by itself for 32 bytes a round.
+
+Spendable is not a property of the store. A proven note counts as spendable only
+when the pool view will actually yield a spend path for it at the pool's tip, so
+the balance asks the view about every note, and `PoolView.canSpend` exists for
+exactly that question — the same conditions as `spendPath` with no sentence
+built for the failing case.
+
+Lines are never added across assets either. A hundred of one and a hundred of
+another is not two hundred of anything.
+
+### Choosing one note, and why the refusal names the largest
+
+The rule is **the smallest spendable note that covers the amount, lowest leaf
+among equals**: stated so a person can predict it, deterministic so the same
+wallet asked twice does not reserve a second note, smallest-that-covers so large
+notes stay whole for the payments they are for.
+
+There is no gathering. A TSL1_SP transfer has two inputs and two outputs and a
+payment needs one of each pair for its change, so a payment is one note or it is
+nothing. That is why the refusal names the **largest spendable value** and never
+the total: the total is the wrong number to show somebody who cannot pay,
+because it is not what they can pay. A wallet whose money is in pieces too small
+consolidates with a payment to itself, which is a payment like any other rather
+than a rule hidden inside selection.
+
+### A round number in a proof is a claim
+
+A standing proof's round number carries no weight in the payment check, so the
+store checks it: leaf `p` is in round `(p >> blockLevel) + 1` and a note recorded
+under any other round is one the view will never be able to anchor. Same check as
+`TrackedNote`, same reason.
+
+### Measured (Apple M3 Pro, `dart test`)
+
+| | |
+|---|---|
+| 10,000 notes, stored | **730,010 B** (bound 4 MB), 73 B a note |
+| a balance over them | **2.1 ms** (bound 10 ms) |
+| encoding them | 10 ms |
+| `settle` over them | 94 ms — one Poseidon2 hash a note |
+
+The balance started at **7.1 ms**, which passed the bound and was still wrong:
+it built a refusal sentence for each of nine thousand stale notes that nobody
+reads, and made a 32-character key out of each note's asset to group by. Naming
+the reason once and dealing notes into assets by comparing four lanes took it to
+2.1 ms. `PoolView.spendPath` also checked membership by scanning its own list,
+which is quadratic in the notes a view keeps; it uses the leaf index now.
+
+The 94 ms is the price of the nullifier rule, and it is paid once per round the
+wallet sees, by a wallet holding ten thousand notes. Caching them in memory for
+a session would remove it and would not break the rule — what the rule forbids
+is writing them down and sending them — but it is not built, because no measured
+wallet needs it.
+
+### Left open, and it is a decision not an oversight
+
+**The store file is not encrypted.** It holds each note's `rho` and `rcm`, which
+are the note's own secrets: `rho` plus `nk` gives the nullifier, and the full
+opening plus `pk_d` reproduces the commitment. It is written owner-only, the
+same as the wallet file, but the wallet file is sealed and this is not.
+
+That is what the spec asks for. `note-store` requires that two stores which took
+the same notes in the same order hold **byte-identical** bytes, and a sealed
+file with a fresh nonce does not; the proposal scopes "encrypted at rest" to
+`wallet-keys`, which is the seed. Both can be true at once — seal it under a key
+derived from the seed with a synthetic nonce (the nonce a PRF of the plaintext,
+as AES-SIV does it), which keeps identical stores identical and leaks only that
+two files hold the same notes — but that is a change to the capability and not
+something to slip into an apply. `NoteStore.encode` and `decode` are public and
+deterministic, so a host that wants its own at-rest story already has the bytes.

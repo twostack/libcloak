@@ -93,9 +93,22 @@ production shape: 1,000 rounds holding 8 notes in 189 ms (bound 2 s) and a
 
 ## 6. Notes
 
-- [ ] 6.1 Implement `note.dart` and `note_store.dart`: the three states, the fields recorded, the reservation rule, and the versioned stored form; verify note-store "A note through its states", "A refused submission releases the note", "A second payment on the same note", "A note without a checked proof", "Two stores agree" and "A truncated store".
-- [ ] 6.2 Implement `balance.dart` and `selection.dart`: the three balance lines and the deterministic choice of at most two notes; verify "A stale line", "The same choice twice" and "No note covers it".
-- [ ] 6.3 Verify note-store "Nullifiers are not published" (every message the library sends collected) and measure 10,000 notes; verify "Ten thousand notes" (under 4 MB, balance under 10 ms) and record it in `docs/DESIGN.md`.
+- [x] 6.1 Implement `note.dart` and `note_store.dart`: the three states, the fields recorded, the reservation rule, and the versioned stored form; verify note-store "A note through its states", "A refused submission releases the note", "A second payment on the same note", "A note without a checked proof", "Two stores agree" and "A truncated store".
+- [x] 6.2 Implement `balance.dart` and `selection.dart`: the three balance lines and the deterministic choice of at most two notes; verify "A stale line", "The same choice twice" and "No note covers it".
+- [x] 6.3 Verify note-store "Nullifiers are not published" (every message the library sends collected) and measure 10,000 notes; verify "Ten thousand notes" (under 4 MB, balance under 10 ms) and record it in `docs/DESIGN.md`.
+
+**Group 6 note.** `CheckedPayment`'s constructor is now private to
+`checker.dart` and it carries the `NoteOpening`, so "refused unless the proof
+checked out" is the argument type and not a rule: there is no way to hand the
+store a proof nobody verified. The store records `rho` and `rcm` but never a
+nullifier — `nk` is an argument to `settle`, not a field — and the test searches
+the saved file for the nullifier lane by lane. Selection is one note, smallest
+that covers, lowest leaf among equals, and the refusal names the largest
+spendable value rather than the total, because a transfer spends one note.
+Measured: 10,000 notes in 730,010 B (bound 4 MB) and a balance in 2.1 ms (bound
+10 ms, and 7.1 ms before the balance stopped building refusals nobody reads).
+**Left open:** the store file is not encrypted, which is what the spec asks for
+and is a decision with a stated cost; see `docs/DESIGN.md` section 5.
 
 ## 7. Invoices
 

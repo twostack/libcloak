@@ -26,12 +26,19 @@ class CheckedPayment {
   /// How deep the witness is buried, for a standing proof.
   final int confirmations;
 
-  const CheckedPayment(
+  /// The note as the payer opened it: the asset, the diversifier the invoice
+  /// named, the value and the two pieces of randomness. It travels with the
+  /// verdict because the note store needs exactly these fields and must not be
+  /// handed them from anywhere a check did not reach.
+  final NoteOpening note;
+
+  const CheckedPayment._(
       {required this.value,
       required this.round,
       required this.position,
       required this.cmRoot,
-      required this.confirmations});
+      required this.confirmations,
+      required this.note});
 }
 
 /// The payee's side of a payment: check what you were handed, against headers
@@ -116,12 +123,13 @@ class PaymentChecker {
     if (note == null) return (null, Refusal(whyNote!.step, whyNote.reason));
 
     return (
-      CheckedPayment(
+      CheckedPayment._(
           value: note.value,
           round: proof.round,
           position: note.position,
           cmRoot: proven.cmRoot,
-          confirmations: header.confirmations),
+          confirmations: header.confirmations,
+          note: proof.note),
       null
     );
   }
@@ -152,7 +160,13 @@ class PaymentChecker {
         cmRoot: root, opening: proof.note.plaintext, pkd: pkd, position: proof.position, path: proof.path);
     if (note == null) return (null, Refusal(whyNote!.step, whyNote.reason));
     return (
-      CheckedPayment(value: note.value, round: proof.round, position: note.position, cmRoot: root, confirmations: 0),
+      CheckedPayment._(
+          value: note.value,
+          round: proof.round,
+          position: note.position,
+          cmRoot: root,
+          confirmations: 0,
+          note: proof.note),
       null
     );
   }

@@ -71,6 +71,7 @@ class PoolView {
   final List<List<int>> _recent = [];
 
   final List<TrackedNote> _notes = [];
+  final Map<int, TrackedNote> _atLeaf = {};
 
   PoolView._(this.shape, this._frontier, this._foldedFrom, this._checkedTo);
 
@@ -118,6 +119,11 @@ class PoolView {
 
   /// The notes being kept, in the order they were taken on.
   List<TrackedNote> get notes => List<TrackedNote>.unmodifiable(_notes);
+
+  /// The note being kept at [position], or null. A wallet asks this for every
+  /// note it holds each time it reads a balance, so it is a lookup and not a
+  /// scan.
+  TrackedNote? trackedAt(int position) => _atLeaf[position];
 
   /// Folds round [round]'s [blockRoot]: the 32 bytes, and nothing else about
   /// the round, that keep every path this view is keeping current.
@@ -199,7 +205,7 @@ class PoolView {
         return (null, _pathRefusal(note.reachedRoot, _frontier.cmRoot, round));
       }
       note.attachTo(_frontier, at: round);
-      _notes.add(note);
+      _keep(note);
       return (note, null);
     }
     // the path is current at an earlier round, so bring it forward through the
@@ -228,7 +234,7 @@ class PoolView {
       return (null, _pathRefusal(detached.cmRoot, _frontier.cmRoot, _frontier.round));
     }
     note.adoptInto(_frontier, brought, at: _frontier.round);
-    _notes.add(note);
+    _keep(note);
     return (note, null);
   }
 
@@ -285,8 +291,13 @@ class PoolView {
     _checkedTo = round;
     _recent.clear();
     note.attachTo(_frontier, at: round);
-    _notes.add(note);
+    _keep(note);
     return (note, null);
+  }
+
+  void _keep(TrackedNote note) {
+    _notes.add(note);
+    _atLeaf[note.position] = note;
   }
 
   /// Moves this view to [checkpoint], verified against [cmRoot].
@@ -314,6 +325,7 @@ class PoolView {
   void forget(TrackedNote note) {
     note.freeze(_frontier);
     _notes.remove(note);
+    if (identical(_atLeaf[note.position], note)) _atLeaf.remove(note.position);
   }
 
   /// How many more rounds may be mined before [note]'s anchor leaves the
@@ -321,13 +333,26 @@ class PoolView {
   /// would be refused by the pool.
   int roundsLeft(TrackedNote note, {required int tip}) => ringEntries - (tip - note.currentAt);
 
+  /// Whether [spendPath] would yield a path for [note] at [tip].
+  ///
+  /// The same conditions, with no sentence built for the failing case. A
+  /// wallet asks this once per note every time somebody looks at a balance, and
+  /// a refusal nobody reads is a string nobody should have paid for.
+  bool canSpend(TrackedNote note, {required int tip}) =>
+      identical(_atLeaf[note.position], note) &&
+      note.maintained &&
+      note.currentAt == _frontier.round &&
+      _checkedTo == _frontier.round &&
+      tip >= _frontier.round &&
+      tip - _frontier.round < ringEntries;
+
   /// The path a spend proof takes for [note], or the refusal that stopped it.
   ///
   /// Being behind is a reason to catch up, never a reason to build a proof the
   /// pool will refuse, so this says how far behind the view is and which rounds
   /// it needs rather than handing over a stale path.
   (MerklePath?, Refusal?) spendPath(TrackedNote note, {required int tip}) {
-    if (!_notes.contains(note)) {
+    if (!identical(_atLeaf[note.position], note)) {
       return (null, const Refusal('note', 'this view is not keeping that note'));
     }
     if (!note.maintained || note.currentAt != _frontier.round) {
@@ -485,7 +510,7 @@ class PoolView {
           }
           note.attachTo(frontier, at: round);
         }
-        view._notes.add(note);
+        view._keep(note);
       }
       r.end('end', '%n bytes after the last note');
       return view;
