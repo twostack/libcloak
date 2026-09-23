@@ -72,13 +72,24 @@ unusable; see `docs/DESIGN.md` section 3.
 
 ## 5. The pool view
 
-- [ ] 5.1 Implement `descriptor.dart` and the view's open path: block size from the descriptor, the power-of-two refusal, the block level and upper level counts, and the refusal when stored state was built under another block size; verify pool-view "The test pool's descriptor", "A leaf count that is not a power of two" and "A pool that changed its block size".
-- [ ] 5.2 Implement `frontier.dart` and `note_path.dart`: the upper frontier, folding one block root, the frozen lower siblings, and the `PoolSpendAir.depth` path yielded for a spend; verify pool-view "The lower siblings never change" and "A maintained path against a built tree" (a directly built tree of 1,000 blocks of 512 leaves, compared against `NoteCommitmentTree.path`).
-- [ ] 5.3 Implement the checked fold and the ordering rules; verify "A wrong block root", "The fixture's two rounds", "A skipped round" and "Catching up".
-- [ ] 5.4 Implement the ring accounting and the idle path; verify "Four rounds of slack", "Too far behind to spend" and "Resuming from a payment".
-- [ ] 5.5 Implement the versioned stored state with temporary-name-then-rename writes; verify "Two views agree", "Unknown state version", "A state file cut short" and "Advancing makes no requests".
-- [ ] 5.6 Verify pool-view "Thirty-two bytes a round", "Notes do not multiply the feed" and "Mutated input" (10,000 mutated roots, paths and positions).
-- [ ] 5.7 Measure in `tool/scratch/view_cost_probe.dart` the 1,000-round catch-up holding 8 notes and the stored state of 100 notes; verify "Catch-up cost" (under 2 s) and "State size" (under 200 KB) and record both in `docs/DESIGN.md`.
+- [x] 5.1 Implement `descriptor.dart` and the view's open path: block size from the descriptor, the power-of-two refusal, the block level and upper level counts, and the refusal when stored state was built under another block size; verify pool-view "The test pool's descriptor", "A leaf count that is not a power of two" and "A pool that changed its block size".
+- [x] 5.2 Implement `frontier.dart` and `note_path.dart`: the upper frontier, folding one block root, the frozen lower siblings, and the `PoolSpendAir.depth` path yielded for a spend; verify pool-view "The lower siblings never change" and "A maintained path against a built tree" (a directly built tree of 1,000 blocks of 512 leaves, compared against `NoteCommitmentTree.path`).
+- [x] 5.3 Implement the checked fold and the ordering rules; verify "A wrong block root", "The fixture's two rounds", "A skipped round" and "Catching up".
+- [x] 5.4 Implement the ring accounting and the idle path; verify "Four rounds of slack", "Too far behind to spend" and "Resuming from a payment".
+- [x] 5.5 Implement the versioned stored state with temporary-name-then-rename writes; verify "Two views agree", "Unknown state version", "A state file cut short" and "Advancing makes no requests".
+- [x] 5.6 Verify pool-view "Thirty-two bytes a round", "Notes do not multiply the feed" and "Mutated input" (10,000 mutated roots, paths and positions).
+- [x] 5.7 Measure in `tool/scratch/view_cost_probe.dart` the 1,000-round catch-up holding 8 notes and the stored state of 100 notes; verify "Catch-up cost" (under 2 s) and "State size" (under 200 KB) and record both in `docs/DESIGN.md`.
+
+**Group 5 note.** The spec's "32 bytes a round" and its "a fold is checked"
+are two verbs, not one: `PoolView.fold` takes the round's `cmRoot` as optional
+and the view carries `round` and `checkedTo` separately, because a wrong block
+root anywhere in a run makes the root at the end of the run wrong — so catching
+up from a stranger and checking once is sound, and `spendPath` is where a
+wallet is held to checking before it spends. A verified payment path turned out
+to already be a frontier, which is what makes "resume from a payment" free and
+what brings a path that arrives a few rounds late forward. Measured at
+production shape: 1,000 rounds holding 8 notes in 189 ms (bound 2 s) and a
+100-note state in 106,988 B (bound 200 KB); see `docs/DESIGN.md` section 4.
 
 ## 6. Notes
 

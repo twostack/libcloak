@@ -302,3 +302,139 @@ fails carrying the port's own reason, and the same proof is accepted the moment
 the source answers again, because the checker holds no state. The other half —
 that the wallet's *stored* state is unchanged — needs the pool view and the
 note store, and is owed in groups 5 and 6.
+
+## 4. The pool view: 32 bytes a round, and what they buy (2026-09-23)
+
+The wallet's picture of the pool is the tree above the block level and one path
+per unspent note. It is advanced by one 32-byte block root a round and it has
+no port, no socket and no callback. The privacy property is not that the view
+is careful about what it asks — it is that there is nothing for it to ask.
+
+### Why the power of two is load-bearing
+
+`PoolShape` refuses a leaf count that is not a power of two, naming it. That is
+not tidiness. Round N appends a fixed block of leaves, so round N *owns* the
+aligned subtree at level log2(count), index N − 1 — and that sentence is true
+only at a power of two. At 608 leaves a round the leaves straddle two subtrees,
+no round owns a node, and there is no such thing as "the round's block root".
+The whole design rests on that one number, so it is checked before a view is
+opened and again when stored state is read back under a descriptor that may
+have changed. tstokenlib's own `PoolDescriptor` refuses 608 as well; the
+libcloak check is the second line, and it exists because a wallet should not
+learn the pool changed shape at the round where a path stops reaching a root.
+
+The fixture pool appends 32 leaves a round: **block level 5, 27 upper levels**.
+Production appends 512: **block level 9, 23 upper levels**.
+
+### Folding and checking are two verbs
+
+The spec asks for two things that look contradictory: a round must cost 32
+bytes, and a fold must be checked against a commitment root the wallet proved
+off the chain. A commitment root is another 32 bytes, so doing both every round
+costs 64.
+
+They are not contradictory, because a wrong block root anywhere in a run makes
+the root at the *end* of the run wrong too. So `PoolView.fold` takes the
+`cmRoot` as optional and the view carries two numbers, `round` and `checkedTo`:
+folding a thousand roots from a stranger and checking once at the end is
+sound, and is what a wallet catching up actually does. What a wallet may not do
+is build a spend on an unchecked fold, and that is enforced where it belongs —
+`spendPath` refuses while `checkedTo != round`, naming both.
+
+### What a note keeps, and why a checkpoint cannot replace it
+
+A path splits at the block level. The **lower** siblings are the note's company
+inside the block its own round appended; they were fixed when that round was
+mined and are never recomputed. The **upper** siblings follow the pool, and at
+most one of them moves a round.
+
+A `Checkpoint` — the round, its block root, and the complete left subtrees above
+the block level — is everything a follower needs to fold *forward*. It is at
+most 23 nodes, **736 bytes**, whatever the pool's age, and it is accepted with
+no signature and no trust: the frontier is taken only if the root it computes is
+the `cmRoot` of a round the wallet proved off the chain, and a frontier of some
+other tree reaches some other root.
+
+What it cannot do is bring an existing note's path up to date, because a note's
+upper siblings are made of the block roots appended since its round and a
+frontier does not contain them. So `restoreTo` does not silently drop the notes
+and does not silently update them: it **freezes** them where they stood, and
+`spendPath` refuses a frozen note naming the first round that was never folded
+into it. That is the difference between the pool's two kinds of wallet — one
+holding no note rejoins for 736 bytes and a head proof, one holding a note pays
+32 bytes a round for as long as it holds it.
+
+### A verified path is a frontier
+
+This fell out of the shape rather than being designed in, and it is what makes
+"a wallet with no money may stop following" workable. A note's path already
+contains a checkpoint: its lower siblings and its leaf give its block's root,
+and its upper siblings at the levels where the block index has a bit set are
+exactly the complete left subtrees `BlockFold.at` wants. So a view that stopped
+at round 4 and is handed one verified path for a note from round 9 resumes at
+round 9 for nothing — `PoolView.resume` — and never reads rounds 5 to 8.
+
+The same machinery brings a path that arrives a few rounds late forward:
+`track` rebuilds a detached frontier from the note's own path, replays the block
+roots the view retained, and takes the result only if it lands on the view's own
+root. The view keeps the last `PoolHeader.ringEntries` (4) block roots for this,
+128 bytes, and that bound is not arbitrary — a path more than four rounds stale
+is unspendable anyway, because its root has left the pool's ring.
+
+### Ring accounting
+
+`roundsLeft` is `ringEntries − (tip − currentAt)`: four when the view is current
+with the tip, and `spendPath` refuses at zero or less, naming how far behind the
+view is *and* which rounds it needs. Being behind is a reason to catch up, never
+a reason to build a proof the pool will refuse.
+
+### Measured (Apple M3 Pro, `dart test` and `tool/scratch/view_cost_probe.dart`)
+
+At production shape: 512 leaves a round, 1,000 rounds, folded against a tree of
+512,000 leaves built directly from its leaves and compared path for path.
+
+| | |
+|---|---|
+| catch up 1,000 rounds holding 8 notes | **189 ms** (bound 2 s), 189 µs a round |
+| the same holding 0 / 1 / 100 notes | 203 / 189 / 201 ms — the note count does not move it |
+| the feed for those 1,000 rounds | 32,000 B |
+| stored state, 100 notes | **106,988 B** (bound 200 KB), 1,069 B a note |
+| reopening it | 2.1 ms |
+| checkpoint at round 1,000 | 8 nodes, 295 B on the wire (worst case 23 nodes, 775 B) |
+| joining from it | 0.26 ms |
+| 10,000 mutated roots, paths and positions | 3,245 `cmRoot`, 4,019 `path`, 2,647 `position`, 89 `blockRoot`, **0 accepted, 0 unnamed errors** |
+
+Two of those numbers are the requirement rather than a footnote. The first is
+that 0 / 1 / 8 / 100 notes all cost the same: a round is 23 hashes up the upper
+tree plus, for each note, at most one sibling copied — so the cost is the levels
+above the block and not the size of the tree or the size of the wallet. The
+second is the 0 accepted out of 10,000 mutations. Unlike an address, where a
+flipped byte inside a KEM key is a well-formed address for a key nobody holds,
+every input here is checked against a root: a bent block root does not fold to
+the round's `cmRoot`, and a bent path or position does not reach the view's. A
+mutation has nowhere to hide.
+
+### The test's own tree
+
+`_RefUpper` in `test/pool_view_test.dart` is the upper tree written out the long
+way — every node kept, nothing pruned, no tracked paths — so the 1,000 rounds of
+commitment roots the fold is checked against are not the fold's own opinion. It
+is anchored twice: its root after 1,000 blocks equals the root of the tree built
+straight from 512,000 leaves, and the fixture's rounds are checked against the
+`cmRoot`s a `ShieldedLedger` rebuilt from the mined round transactions.
+
+### Half-verified, and owed
+
+"Born at a round" from group 3 is now whole on this side: a view opened at a
+checkpoint starts there and refuses to yield a path for a note from a round it
+never folded. "The source is unavailable" is still owed its second half — the
+wallet's *stored* state unchanged across a failed read — which needs the note
+store in group 6, now that the view's own half (a refused fold and a refused
+open both leave the file whole) is verified here.
+
+### Left for later
+
+The state file is written owner-only and holds no key and no seed. What it does
+say is *which* commitments are this wallet's, and that link is the thing worth
+protecting; encrypting it belongs with the note store in group 6, where the
+memos and the viewing keys live, rather than half here.
