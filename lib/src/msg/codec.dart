@@ -30,6 +30,13 @@ class Reader {
     return r;
   }
 
+  /// A reader over bytes that carry no version and kind of their own,
+  /// because something else already vouched for them: the plaintext an AEAD
+  /// returned, whose version is in the header the AEAD authenticated. The
+  /// bounds still apply — an authenticated message can still be the wrong
+  /// shape.
+  static Reader raw(List<int> bytes) => Reader._(bytes);
+
   /// The kind byte [bytes] carry, or null when they are too short or of
   /// another version. Reading it costs nothing, so a caller can route a
   /// message before decoding it.
@@ -108,6 +115,10 @@ class Writer {
       ..addByte(version)
       ..addByte(kind);
   }
+
+  /// A writer with no prefix, for a body that is sealed inside a message
+  /// whose version and kind are outside it.
+  Writer.raw();
 
   void byte(int v) => _out.addByte(v);
   void bytes(List<int> v) => _out.add(v);

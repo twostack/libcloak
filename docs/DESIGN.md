@@ -120,3 +120,92 @@ and `MerkleMembership`; the versioned `PaymentProof` in both forms; and
 thing it has no evidence for — and one appended to it is refused naming the
 field. A payee that has not folded the round refuses a short proof naming both
 rounds and asks for the standing form, rather than failing the payment.
+
+## 2. Keys: one seed, and where it is written (2026-09-23)
+
+**Result: built. The derivation is fixed by a recorded vector, and the wallet
+file holds nothing in the clear.**
+
+### The derivation, stated
+
+```
+  sk   = the first 5 lanes of HKDF-SHA256(seed, "tsl1-libcloak/derivation/1/sk"),
+         taken as little-endian 32-bit words, each masked to 31 bits and drawn
+         again on the one value M31 has no room for
+  ivk  = PoolHash.ivk(sk)      d(i) = PoolHash.diversifier(ivk, i)
+  nk   = PoolHash.nk(sk)       pk_d = PoolHash.pkdFromIvk(ivk, d)
+  ovk  = PoolHash.ovk(sk)
+```
+
+Everything below `sk` is tstokenlib's, and had to be: the spend circuit derives
+`ivk` and `nk` from the `sk` register itself, so a wallet that derived them any
+other way would build proofs the pool refuses. The only thing libcloak decides
+is how one seed becomes one `sk`, and `WalletKeys.derivation` is the number
+that says which way.
+
+The masking matters more than it looks. A 32-bit word reduced modulo
+2^31 − 1 is biased; a 31-bit word is uniform except for the single value
+`0x7fffffff`, which is drawn again from the next HKDF block. So the key is
+uniform over the field and the derivation is still a pure function of the seed.
+
+`test/wallet_keys_test.dart` carries the vector — `sk`, `ivk`, `nk`, `ovk` and
+the diversifiers and `pk_d` of addresses 0 and 1, from a stated test seed. A
+change to any of it fails the suite, which is the point: a restored wallet
+derived under a changed derivation is a different wallet holding none of the
+same money.
+
+### The file
+
+One AEAD box with a plain header. The header carries the version, the KDF and
+its cost, the salt and the nonce, **and is the box's associated data** — so an
+attacker who steals the file cannot quietly rewrite 64 MiB down to 8 KiB and
+grind the passphrase at the lower price; the test that tries it is refused at
+`passphrase`. Argon2id (the pure-Dart implementation in `package:cryptography`,
+checked here against the RFC 9106 vector) and XChaCha20-Poly1305, whose 24-byte
+nonce can be drawn at random with no counter to keep.
+
+A write creates the temporary file, makes it owner-only, writes it, and renames
+it over the wallet. In that order: no secret reaches the disk before the
+permissions are narrowed, and the wallet itself is only ever replaced by a
+rename. The temporary name is `<path>.tmp`, and a file left under it is the
+wreckage of a crash — the test writes a whole, valid, *newer* wallet there and
+then checks that opening the wallet gives the older one, untouched.
+
+### Measured (Apple M3 Pro, `dart test`)
+
+| | |
+|---|---|
+| seed to `sk`, `ivk`, `nk`, `ovk` | **38.2 us** |
+| one address (hybrid KEM, ML-KEM keygen included) | **0.54 ms**, 1,261 B |
+| wallet file, `WalletKdf.strong` (64 MiB, 3 passes) | write **413 ms**, open **402 ms** |
+| wallet file, `WalletKdf.fast` (8 MiB, 1 pass) | write 80 ms, open 18 ms |
+| the file itself | **114 bytes** |
+| 10,000 mutated addresses | 5,028 refused (2,415 length, 1,883 `pkd`, 724 `diversifier`, 4 empty, 2 `kem`), 4,972 parsed and re-encoded to what was given, **0 crashes** |
+
+`WalletKdf.strong` is what a wallet is written under; `fast` exists for the
+suite, and for a host that opens a wallet on every keystroke and knows what it
+is giving up. The cost is written into the file, so wallets written under one
+cost keep opening after the defaults move.
+
+The 4,972 mutations that *parse* are not a hole: a flipped byte inside the
+1,216-byte KEM public key gives a perfectly well formed address for a key
+nobody holds. An address is a destination, not a claim — what stops a payment
+going to the wrong place is the invoice's signature over it, which is group 7.
+
+### What the privacy claim actually is
+
+Two addresses of one wallet share exactly one field, the KEM id, which is a
+format constant. The test walks every four-byte run of one address's
+diversifier, `pk_d` and KEM key and requires that none of them appears anywhere
+in the other's. With the `ivk` they link immediately — `d(i)` is just a hash of
+it — and that asymmetry is the design: a viewer can enumerate every address a
+wallet will ever issue, and a payer holding one address learns nothing about
+the payee's other dealings.
+
+### Left for later
+
+`AddressCodec.read` ends in a `try`/`catch` that turns anything
+`NoteAddress.parse` throws into a refusal. Across 10,000 mutations it never
+fired — every rejection came from the length, KEM and field checks in front of
+it. It stays, because a reader whose only defence is the checks somebody
+remembered to write is a reader one field away from throwing at a caller.

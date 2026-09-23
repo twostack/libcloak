@@ -47,9 +47,14 @@ against a *folded* round from a real `pool-view` — still need groups 3 to 7.
 
 ## 3. Keys
 
-- [ ] 3.1 Implement `seed.dart` and `wallet_keys.dart`: the versioned derivation from one seed to the pool spending key and, through `PoolHash`, to `ivk`/`nk`/`ovk`; the per-invoice diversifier counter; the birthday round; verify wallet-keys "Same seed, same wallet", "A derivation vector" (a recorded vector in the suite), "Ten invoices, ten addresses", "Addresses do not link" and "Born at a round".
-- [ ] 3.2 Implement `wallet_file.dart`: a versioned file holding the seed and the counter under a memory-hard KDF and an AEAD from `package:cryptography`, owner-only permissions, temporary-name-then-rename writes; verify "Wrong passphrase", "Nothing in the clear" (the bytes hold no run equal to the seed or any key), "Unknown version" and "A crash during a write".
-- [ ] 3.3 Verify wallet-keys "Mutated addresses" (10,000 mutated `NoteAddress` encodings) and "Errors carry no secrets" (every raisable error collected and searched).
+- [x] 3.1 Implement `seed.dart` and `wallet_keys.dart`: the versioned derivation from one seed to the pool spending key and, through `PoolHash`, to `ivk`/`nk`/`ovk`; the per-invoice diversifier counter; the birthday round; verify wallet-keys "Same seed, same wallet", "A derivation vector" (a recorded vector in the suite), "Ten invoices, ten addresses", "Addresses do not link" and "Born at a round".
+- [x] 3.2 Implement `wallet_file.dart`: a versioned file holding the seed and the counter under a memory-hard KDF and an AEAD from `package:cryptography`, owner-only permissions, temporary-name-then-rename writes; verify "Wrong passphrase", "Nothing in the clear" (the bytes hold no run equal to the seed or any key), "Unknown version" and "A crash during a write".
+- [x] 3.3 Verify wallet-keys "Mutated addresses" (10,000 mutated `NoteAddress` encodings) and "Errors carry no secrets" (every raisable error collected and searched).
+
+**Group 3 note.** "Born at a round" is verified here in the half that exists:
+`WalletKeys.birthday` is 7 and `couldHoldNotesIn` refuses every round below it.
+The other half — that the *pool view* starts there — is verified in group 5,
+which builds the view and takes this number from it.
 
 ## 4. Headers
 
