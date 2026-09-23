@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:tstokenlib/tstokenlib.dart';
 
+import '../headers/merkle_membership.dart';
 import '../refusal.dart';
 import 'codec.dart';
 
@@ -160,8 +161,13 @@ class PaymentProof {
     }
     if (blockHash.length != 32) throw ArgumentError('a block hash is 32 bytes');
     if (txIndex < 0 || txIndex > 0xffffffff) throw ArgumentError('a transaction index fits 32 bits');
-    if (branch.length > 64) throw ArgumentError('a branch is at most 64 deep');
+    if (branch.length > MerkleMembership.maxBranch) {
+      throw ArgumentError('a branch is at most ${MerkleMembership.maxBranch} deep');
+    }
     if (branch.any((x) => x.length != 32)) throw ArgumentError('a branch node is 32 bytes');
+    if (branch.length < 63 && txIndex >= (1 << branch.length)) {
+      throw ArgumentError('index $txIndex is outside a block of ${1 << branch.length}');
+    }
     // a proof this side cannot decode is a proof this side must not build:
     // the reader refuses the whole thing at maxProof before it reads a byte
     final size = _fixedSize + 4 + roundTx.length + 4 + witnessTx.length + 32 + 4 + 1 + 32 * branch.length;
@@ -192,6 +198,16 @@ class PaymentProof {
     _checkPath(position, path);
     return PaymentProof._(ProofForm.short, round: round, position: position, path: _copyPath(path), note: note);
   }
+
+  /// Where the witness sits in its block, as a [MerkleProof] on its own.
+  /// Null for the short form, which carries no block.
+  ///
+  /// The txid is computed from the witness the proof already carries, so
+  /// inside a payment proof it is not a separate claim and cannot disagree —
+  /// which is why the payment proof's wire format does not carry one.
+  MerkleProof? get membership => form == ProofForm.standing
+      ? MerkleProof.of(witnessTx!, blockHash: blockHash!, txIndex: txIndex, branch: branch)
+      : null;
 
   static void _checkRound(int round) {
     if (round < 1 || round > 0xffffffff) throw ArgumentError('a round number is 1 or more');
@@ -276,9 +292,14 @@ class PaymentProof {
       final blockHash = r.take('blockHash', 32);
       final txIndex = r.u32('txIndex');
       final levels = r.byte('branch');
-      if (levels > 64) throw Refusal('branch', 'declares $levels levels, at most 64');
+      if (levels > MerkleMembership.maxBranch) {
+        throw Refusal('branch', 'declares $levels levels, at most ${MerkleMembership.maxBranch}');
+      }
       final branch = [for (int i = 0; i < levels; i++) r.take('branch', 32)];
       r.end('end', '%n bytes after the last field');
+      if (levels < 63 && txIndex >= (1 << levels)) {
+        throw Refusal('txIndex', 'position $txIndex is outside a block of ${1 << levels}');
+      }
       return PaymentProof.standing(
           round: round,
           roundTx: roundTx,

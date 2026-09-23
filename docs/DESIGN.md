@@ -35,7 +35,8 @@ real PP1_SP is 16,924**, and the first byte the two differ at is 563.
 
 ### What was run
 
-`test/lineage_attack_test.dart`, 21 cases, all passing:
+`test/lineage_attack_test.dart`, 13 cases, all passing (with the 8 port and
+fake tests in `test/fakes_test.dart` that groups 1 and 2 rest on):
 
 - **In process.** The forgery is built from the fixture's own round 1, given a
   witness of the forger's making, placed in a block the payee's header source
@@ -209,3 +210,95 @@ the payee's other dealings.
 fired — every rejection came from the length, KEM and field checks in front of
 it. It stays, because a reader whose only defence is the checks somebody
 remembered to write is a reader one field away from throwing at a caller.
+
+## 3. Headers: the only evidence taken from the chain (2026-09-23)
+
+**Result: built and verified. Two bugs found, one of them a real one.**
+
+`proven_header.dart` and `merkle_membership.dart` arrived in group 2 because
+the gate needed them; group 4 is their scenarios, the serialized form the spec
+asks for, and the measurement.
+
+### What a merkle proof is now
+
+`MerkleProof` is the standalone, versioned form: a txid, a block hash, an
+index and the branch. A payment proof still carries those fields inline —
+it also carries the transaction, so the two travel as one message — and
+`PaymentProof.membership` hands one back, so the merkle check has exactly one
+implementation and the checker goes through it.
+
+The txid in a `MerkleProof` is a **claim**, and `MerkleMembership.confirm`
+hashes the transaction it was handed and refuses if the two disagree, **naming
+both**. That is what makes "compute the txid, do not take it" a rule with a
+test behind it rather than a sentence in a doc comment. Inside a payment proof
+the two cannot disagree, because the transaction is right there; that is why
+the payment proof's wire format carries no txid of its own and did not change.
+
+`confirm` also takes the block hash of the header whose root it was given, and
+refuses a proof that names another block. In the payment path the two are the
+same field, so it never fires; it exists for the standalone form, where a proof
+for block A checked against block B's root would otherwise turn on the branch
+arithmetic alone.
+
+### What a payee asks the chain
+
+The privacy claim is checked, not asserted. A full payment check against a
+recording fake source makes exactly these calls:
+
+```
+heightOfBlock <the block hash that arrived inside the proof>
+headerAtHeight <a height>
+tip
+```
+
+The test walks every recorded call, requires each to be one of those three,
+requires the one block hash asked about to be the proof's own, and then
+searches the whole recorded transcript for the round txid, the witness txid,
+the payee's `pk_d` and the payee's `ivk`. None of them appears. A short proof
+asks the port nothing at all.
+
+When the source does not have the block, the check stops: the transcript is a
+single `heightOfBlock` call and there is no second source to fall back to.
+
+### Two bugs this found
+
+- **`1 << 64` is zero.** `rootFor` bounded the index with
+  `index >= (1 << branch.length)`, and at the full 64 levels that shift wraps
+  to zero in Dart, so *every* index was refused as "outside a block of 0
+  transactions". A 64-level branch was unusable, which is precisely the case
+  the cost requirement names. The comparison is now skipped at 63 levels and
+  above, where every non-negative 64-bit index is inside the block by
+  construction. The same wrap was in `MerkleProof` and in `PaymentProof`, and
+  both are fixed.
+- **A header handed back by the wallet's own source was re-hashed, but a
+  `MerkleProof` naming another block was not caught.** `confirm` now takes the
+  block hash; see above.
+
+### Measured (Apple M3 Pro, `dart test`)
+
+| | |
+|---|---|
+| a 64-level membership check | **0.153 ms** (bound 5 ms) |
+| a serialized `MerkleProof`, 32 levels | 1,095 B (bound 2,119 at 64 levels) |
+| 10,000 mutated proofs and headers | 2,676 refused at the encoding, 2,324 decoded and then refused by a check (3 were no-op mutations and still confirmed), 3,275 headers refused by length, **0 unnamed errors** |
+
+The 0.153 ms is 64 double-SHA-256 hashes of 64 bytes each and nothing else. It
+is two orders under the bound because there is nothing else in it: the payee
+does not verify a STARK, and the round's proof was verified by the chain when
+the witness was mined.
+
+### The confirmation rule
+
+One on regtest, six everywhere else, from `HeaderChecker.forNetwork`. A block
+counts itself, so a witness in the tip has one confirmation. Below the
+threshold the refusal names both numbers — what it has and what this wallet
+requires — because "not yet" and "no" are different answers and a person acts
+on them differently.
+
+### Left honest
+
+"The source is unavailable" is verified in the half that exists: the check
+fails carrying the port's own reason, and the same proof is accepted the moment
+the source answers again, because the checker holds no state. The other half —
+that the wallet's *stored* state is unchanged — needs the pool view and the
+note store, and is owed in groups 5 and 6.

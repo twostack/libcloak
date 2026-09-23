@@ -26,7 +26,7 @@ export 'src/headers/header_source.dart' show HeaderSource, ChainTip, HeaderSourc
 export 'src/keys/seed.dart' show WalletSeed;
 export 'src/keys/wallet_file.dart' show WalletFile, WalletFileNotice, WalletKdf, StoredWallet;
 export 'src/keys/wallet_keys.dart' show WalletKeys, AddressCodec;
-export 'src/headers/merkle_membership.dart' show MerkleMembership;
+export 'src/headers/merkle_membership.dart' show MerkleMembership, MerkleProof;
 export 'src/headers/proven_header.dart' show HeaderChecker, ProvenHeader;
 export 'src/msg/codec.dart' show Reader, Writer;
 export 'src/msg/payment_proof.dart' show PaymentProof, ProofForm, NoteOpening;

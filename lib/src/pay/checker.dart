@@ -91,17 +91,12 @@ class PaymentChecker {
     final (header, whyHeader) = await headers.proven(proof.blockHash!);
     if (header == null) return (null, whyHeader);
 
-    final witnessId = MerkleMembership.txidOf(proof.witnessTx!);
-    final (root, whyBranch) = MerkleMembership.rootFor(txid: witnessId, index: proof.txIndex, branch: proof.branch);
-    if (root == null) return (null, whyBranch);
-    if (!_eq(root, header.merkleRoot)) {
-      return (
-        null,
-        Refusal('merkle proof',
-            'the witness ${shortHex(witnessId)} at index ${proof.txIndex} reaches ${shortHex(root)}, '
-            'and block ${header.height} commits to ${shortHex(header.merkleRoot)}')
-      );
-    }
+    final whyBranch = MerkleMembership.confirm(
+        merkleRoot: header.merkleRoot,
+        blockHash: header.hash,
+        txBytes: proof.witnessTx!,
+        proof: proof.membership!);
+    if (whyBranch != null) return (null, whyBranch);
 
     // 3 to 4. the round is this pool's, one hop back from the mined witness
     final Transaction round, witness;
@@ -160,13 +155,5 @@ class PaymentChecker {
       CheckedPayment(value: note.value, round: proof.round, position: note.position, cmRoot: root, confirmations: 0),
       null
     );
-  }
-
-  static bool _eq(List<int> a, List<int> b) {
-    if (a.length != b.length) return false;
-    for (int i = 0; i < a.length; i++) {
-      if (a[i] != b[i]) return false;
-    }
-    return true;
   }
 }

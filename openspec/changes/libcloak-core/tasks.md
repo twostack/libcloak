@@ -58,9 +58,17 @@ which builds the view and takes this number from it.
 
 ## 4. Headers
 
-- [ ] 4.1 Implement `proven_header.dart` (the confirmation rule, default 1 on regtest and 6 elsewhere) and `merkle_membership.dart` (txid computed from the bytes, checked against the header's merkle root); verify chain-headers "The fixture's witness", "A proof for another transaction", "Not yet buried" and "A header the source does not know".
-- [ ] 4.2 Verify chain-headers "Mutated proofs" (10,000 mutated headers and proofs), "Unknown proof version", "Checking a payment asks only about blocks" and "The source is unavailable".
-- [ ] 4.3 Measure a 64-level membership check; verify "Check cost" (under 5 ms) and record it in `docs/DESIGN.md`.
+- [x] 4.1 Implement `proven_header.dart` (the confirmation rule, default 1 on regtest and 6 elsewhere) and `merkle_membership.dart` (txid computed from the bytes, checked against the header's merkle root); verify chain-headers "The fixture's witness", "A proof for another transaction", "Not yet buried" and "A header the source does not know".
+- [x] 4.2 Verify chain-headers "Mutated proofs" (10,000 mutated headers and proofs), "Unknown proof version", "Checking a payment asks only about blocks" and "The source is unavailable".
+- [x] 4.3 Measure a 64-level membership check; verify "Check cost" (under 5 ms) and record it in `docs/DESIGN.md`.
+
+**Group 4 note.** "The source is unavailable" is verified in the half that
+exists — the check carries the port's own reason and the checker holds no state
+— but the half about the wallet's *stored* state unchanged needs the pool view
+and the note store, and is owed in groups 5 and 6. Group 4 also added the
+standalone versioned `MerkleProof` the spec's "Unknown proof version" scenario
+requires, and found that `1 << 64` wraps to zero, which made a 64-level branch
+unusable; see `docs/DESIGN.md` section 3.
 
 ## 5. The pool view
 
