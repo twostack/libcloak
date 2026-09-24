@@ -129,6 +129,11 @@ void main() {
           CatchUpKind.blockRoots => PoolCatchUpReply.blockRoots(from: msg.from, roots: [
               for (int r = msg.from; r <= rounds && r - msg.from < msg.count; r++) r == 1 ? br1 : br2
             ]).encode(),
+          // this pool serves no round by number, and says so by name rather
+          // than going quiet
+          CatchUpKind.round => PoolCatchUpReply.refused(
+              msg.what, CatchUpRefusal.notServed, 'this pool does not serve a round by number',
+              id: msg.id).encode(),
         };
       }
       throw StateError('the pool was asked ${msg.kind.name}');

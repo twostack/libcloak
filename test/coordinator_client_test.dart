@@ -69,6 +69,14 @@ void main() {
               roots.add(r == 1 ? br1 : br2);
             }
             return PoolCatchUpReply.blockRoots(from: msg.from, roots: roots).encode();
+          case CatchUpKind.round:
+            // this fixture serves no round by number. A pool that does not
+            // serve a kind refuses it by name rather than going quiet, which
+            // is what a wallet has to be able to tell apart.
+            return PoolCatchUpReply.refused(msg.what, CatchUpRefusal.notServed,
+                    'this fixture pool does not serve a round by number',
+                    id: msg.id)
+                .encode();
         }
       }
       throw StateError('the fixture pool was asked ${msg.kind.name}');
