@@ -170,6 +170,13 @@ the same pack as the rest it triples the wall clock of every measured bound,
 and those are bounds on one core. It needs `../localnet` up and a built
 `../go-ricochet/ricochet`.
 
+## Embedding it
+
+`docs/developer-guides/INTEGRATING_LIBCLOAK.md` is the guide for a host author:
+the two ports and why they are narrow, the rules the library cannot enforce for
+you, and every place where a plausible-looking shortcut costs money or privacy.
+Read it before writing an adapter.
+
 ## The record
 
 `docs/DESIGN.md` is the running record, appended in dated sections: what was
