@@ -606,6 +606,10 @@ class CoordinatorClient {
   /// it true is [checker]'s own block headers, not the pool's word. The round
   /// number is taken from the header's leaf count, so the number the pool
   /// stated is compared with the number the chain carries rather than used.
+  ///
+  /// A pool with nothing mined yet refuses this rather than answering, which
+  /// comes back as a refusal stepped `notYet`. That is the ordinary state of
+  /// a pool before its first round, not a failure.
   Future<(CheckedHead?, Refusal?)> headProof(PaymentChecker checker) async {
     final (reply, why) = await _ask(PoolCatchUpRequest.head());
     if (reply == null) return (null, why);
@@ -636,6 +640,11 @@ class CoordinatorClient {
   /// by computing a commitment root the wallet proved off the chain, which is
   /// [PoolView.atCheckpoint]'s job. This method only gets the bytes into the
   /// right shape.
+  ///
+  /// A pool that refuses comes back as a refusal stepped with the protocol's
+  /// reason, and no checkpoint. The four reasons divide in two: `notYet` and
+  /// `unavailable` are worth asking about again, `notServed` and
+  /// `unpublishedRange` never are, and the sentence says which.
   Future<(Checkpoint?, Refusal?)> frontier() async {
     final (reply, why) = await _ask(PoolCatchUpRequest.frontier());
     if (reply == null) return (null, why);
@@ -657,6 +666,10 @@ class CoordinatorClient {
   /// this pool asks for. Asking for "everything since round 4,117" would say
   /// when this wallet was last current, and over a few catch-ups that is a
   /// fingerprint.
+  ///
+  /// A run the pool has not mined into yet is refused as `notYet` rather than
+  /// served short, so a wallet ahead of the pool is told so rather than handed
+  /// an empty answer to interpret.
   Future<(BlockRootRun?, Refusal?)> blockRootsFor(int round) async {
     if (round < 1) return (null, Refusal('round', 'a round is 1 or more, not $round'));
     final range = pool.catchUpRange;
@@ -783,6 +796,31 @@ class CoordinatorClient {
           null,
           Refusal('catch-up',
               'the pool answered a ${request.what.name} request with a ${msg.what.name} reply')
+        );
+      }
+      // A refusal is an answer, and it carries none of the fields an answer
+      // carries. It becomes a named refusal here, before any caller reaches
+      // for a payload that is not there: a refused frontier has no block root
+      // and a refused head has no transactions, so every caller would
+      // otherwise read a null. The reason is the step, because the protocol
+      // fixes those four names for its life and a host switching on one is
+      // switching on something stable.
+      if (msg.isRefused) {
+        final reason = msg.refusal!;
+        // Exhaustive on purpose. A reason added to the protocol later should
+        // stop this compiling until somebody decides whether waiting helps,
+        // rather than default to telling a person to give up.
+        final againMayWork = switch (reason) {
+          CatchUpRefusal.notYet || CatchUpRefusal.unavailable => true,
+          CatchUpRefusal.notServed || CatchUpRefusal.unpublishedRange => false,
+        };
+        return (
+          null,
+          Refusal(
+              reason.name,
+              'the pool refused the ${request.what.name} request: '
+              '${msg.sentence ?? 'it gave no sentence'}; '
+              '${againMayWork ? 'asking again after the next round may succeed' : 'this pool does not serve it'}')
         );
       }
       return (msg, null);

@@ -1554,3 +1554,86 @@ one that does.
 - A deposit built in the suite is not mined in the suite: the fixture's rounds
   are fixed, and proving a round with a new deposit costs an aggregation. The
   localnet run is where a built deposit would be taken in end to end.
+
+## 13. A refusal is an answer (2026-09-24)
+
+tstokenlib's protocol version 3 gave a catch-up reply a second shape: a
+refusal, carrying a reason and a sentence and **none of the fields an answer
+carries**. Reviewing that change against this library found that nothing here
+knew about it, and the consequence was worse than a wrong message.
+
+### What it did
+
+```
+Unhandled exception:
+Null check operator used on a null value
+#0  CoordinatorClient.frontier (coordinator_client.dart:644:66)
+```
+
+Line 644 was `reply.blockRoot!`, which is null on a refusal. `headProof` had
+the same shape at `reply.witnessTx!`, `reply.blockHash!` and `reply.roundTx!`.
+`blockRootsFor` did not crash, which was arguably worse: a refusal leaves
+`from` at zero, so it reported *"this client asked for the run from round 1 and
+the pool answered with the run from round 0"*, naming a disagreement that had
+not happened and saying nothing about the one that had.
+
+This broke the rule the whole library is written to: everything that takes
+bytes from somebody else ends in a value or a named `Refusal`, never in an
+exception that escaped. And the input was not even hostile. `notYet` is the
+honest answer **before a pool's first round is mined**, and `unavailable` is
+the honest answer whenever the coordinator's chain access fails, so the first
+`sync` against a fresh pool would have crashed.
+
+### Where the check goes, and why there
+
+In `_ask`, after the kind and `what` checks and before the reply is handed
+back. All three public callers go through it, so one check covers them and
+none of them can reach for a payload that is not there. Putting it in each
+caller would have been three chances to forget.
+
+The reason's name is the refusal's step, rather than a step of this library's
+invention, because the protocol fixes those four names for its life. A host
+switching on `notYet` is switching on something stable.
+
+### The two halves of the reason set
+
+The four reasons divide in two, and the division is the thing a person needs:
+
+| reason | asking again |
+|---|---|
+| `notYet` | may succeed, after the next round |
+| `unavailable` | may succeed, later |
+| `notServed` | never; this pool does not serve the kind |
+| `unpublishedRange` | never; the range is not one the descriptor publishes |
+
+The sentence says which, so a CLI does not have to know the table. The switch
+that computes it is exhaustive **on purpose**: a reason added to the protocol
+later should stop this compiling until somebody decides whether waiting helps,
+rather than defaulting to telling a person to give up. The cost of that choice
+is a compile break on a protocol change, which is exactly the break that this
+same version-3 change caused in two test files and which was cheap to fix.
+
+### What the suite could not have told us
+
+Nothing. Six tests were added and they pass, but the defect was found by
+reading the protocol change, not by running anything: the fake pools in this
+suite answered every catch-up, because until version 3 there was no other
+answer to give. A fake that can only succeed tests only success.
+
+The same gap remains open for the mined-round notice. `FakeTransport` answers
+when asked and never pushes, so an unsolicited `PoolRoundMined` arriving in the
+replies folder is something this suite cannot produce. That one is not fixed:
+a notice is 719,563 B at test parameters against a 4,096 B bound on a
+submission reply, so it comes back as `size: a reply is at most 4096 bytes and
+719563 arrived`, and the submission is reported `unanswered` while its real
+reply is orphaned. The note stays reserved, which is the safe direction, but
+the report is wrong.
+
+### Owed
+
+- Consuming a `PoolRoundMined` notice, which needs a transport that keeps
+  pushes out of the stream `request` reads from.
+- Matching a catch-up reply to its request by the `id` version 3 added. Nothing
+  is wrong today, because each `_ask` awaits its own answer and there is never
+  a second catch-up in flight, but the protocol now supports the check and a
+  client that took it would be harder to confuse.

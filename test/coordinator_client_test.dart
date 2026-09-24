@@ -553,6 +553,95 @@ void main() {
     });
   });
 
+  // ---- a refusal is an answer, and carries none of an answer's fields ----
+
+  group('The pool refuses a catch-up', () {
+    /// A pool that refuses everything it is asked, for [reason].
+    FakeTransport refusing(CatchUpRefusal reason, String sentence) {
+      final t = honest();
+      t.answer = (frame) {
+        final r = PoolMessage.decode(frame) as PoolCatchUpRequest;
+        return PoolCatchUpReply.refused(r.what, reason, sentence, id: r.id).encode();
+      };
+      return t;
+    }
+
+    test('A frontier nobody will answer is a refusal, not a crash', () async {
+      final t = refusing(CatchUpRefusal.notYet, 'nothing is mined yet');
+      final client = await clientOn(t);
+      final (cp, why) = await client.frontier();
+      expect(cp, isNull);
+      expect(why, isNotNull);
+      expect(why!.step, 'notYet');
+      expect(why.reason, contains('nothing is mined yet'));
+      // the refusal is an answer, so it is not asked for a second time
+      expect(t.attempts, 1);
+    });
+
+    test('A head nobody will answer is a refusal, not a crash', () async {
+      final t = refusing(CatchUpRefusal.notYet, 'nothing is mined yet');
+      final client = await clientOn(t);
+      final (head, why) = await client.headProof(checker);
+      expect(head, isNull);
+      expect(why!.step, 'notYet');
+    });
+
+    test('A wallet with no state is told why it cannot become current', () async {
+      final client = await clientOn(refusing(CatchUpRefusal.unavailable, 'the pool cannot reach its node'));
+      final (view, why) = await client.current(checker);
+      expect(view, isNull);
+      expect(why!.step, 'unavailable');
+      expect(why.reason, contains('the pool cannot reach its node'));
+    });
+
+    test('A wallet holding a note is told why it cannot come forward', () async {
+      // the head answers, so the refusal has to come from the run of roots
+      final t = honest();
+      t.answer = (frame) {
+        final r = PoolMessage.decode(frame) as PoolCatchUpRequest;
+        if (r.what == CatchUpKind.head) return headReply.encode();
+        return PoolCatchUpReply
+            .refused(r.what, CatchUpRefusal.notYet, 'round 2 is not mined yet', id: r.id)
+            .encode();
+      };
+      final client = await clientOn(t);
+      final view = PoolView.atGenesis(shape);
+      final why = await client.bringForward(view, checker);
+      expect(why, isNotNull);
+      expect(why!.step, 'notYet');
+      // nothing was folded on the strength of a refusal
+      expect(view.round, 0);
+    });
+
+    test('Each reason comes back under its own name, and says whether to ask again', () async {
+      const asking = {
+        CatchUpRefusal.notYet: true,
+        CatchUpRefusal.unavailable: true,
+        CatchUpRefusal.notServed: false,
+        CatchUpRefusal.unpublishedRange: false,
+      };
+      for (final MapEntry(key: reason, value: worthAsking) in asking.entries) {
+        final client = await clientOn(refusing(reason, 'because'));
+        final (cp, why) = await client.frontier();
+        expect(cp, isNull, reason: '${reason.name} produced a checkpoint');
+        expect(why!.step, reason.name);
+        expect(why.reason, contains('because'));
+        expect(why.reason, contains(worthAsking ? 'asking again' : 'does not serve it'),
+            reason: '${reason.name} did not say whether asking again can help');
+      }
+    });
+
+    test('A refusal names no field an answer would have carried', () async {
+      // the whole point: a refused reply's payload is null, and nothing may
+      // read it. A refusal that leaked a payload name would mean somebody did.
+      final client = await clientOn(refusing(CatchUpRefusal.notServed, 'this pool serves no frontier'));
+      final (_, why) = await client.frontier();
+      for (final field in ['blockRoot', 'roundTx', 'witnessTx', 'null']) {
+        expect(why!.reason, isNot(contains(field)));
+      }
+    });
+  });
+
   // ---- a catch-up request says nothing about the wallet ----
 
   test('Requests come from the published set', () async {
