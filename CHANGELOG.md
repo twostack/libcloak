@@ -1,3 +1,12 @@
+## 0.1.1
+
+- **The native STARK kernels arrive with the package.** libcloak now depends on
+  tstokenlib 2.1.0, whose build hook bundles the kernels into every program
+  that uses it: a prebuilt, checksum-verified library for macOS, iOS, Linux,
+  Android and Windows, or a cargo build anywhere else. Nothing needs building
+  or pointing at by hand, and `STARK_KERNELS_LIB` is only an override now.
+- **Requires Dart 3.10**, the first release where build hooks are stable.
+
 ## 0.1.0
 
 The first release: a headless wallet library for the TSL1_SP shielded pool,
