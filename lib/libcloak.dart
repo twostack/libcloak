@@ -47,4 +47,6 @@ export 'src/net/coordinator_client.dart'
 export 'src/pay/acknowledgement.dart' show Acknowledgement;
 export 'src/pay/builder.dart' show PaymentBuilder, BuiltPayment, PaymentProofs;
 export 'src/pay/checker.dart' show PaymentChecker, CheckedPayment, CheckedHead;
+export 'src/pay/onramp.dart'
+    show DepositBuilder, ProvedDeposit, BuiltDeposit, WithdrawalBuilder, BuiltWithdrawal;
 export 'src/refusal.dart' show Refusal, shortHex;

@@ -145,9 +145,10 @@ Not here yet:
   and refuses anything else, so a wallet with no stored state cannot yet join a
   running pool without reading its whole feed. The wallet side is built and
   tested against a fake pool.
-- **deposits, withdrawals and restore from a seed**, which are `libcloak-onramp`.
-  Restore is the one place the no-scanning rule does not apply and deserves its
-  own thinking.
+- **restore from a seed.** Deposits and withdrawals are built
+  (`DepositBuilder`, `WithdrawalBuilder`, change `onramp-builders`); restore is
+  the one place the no-scanning rule does not apply and deserves its own
+  thinking.
 - **an SPV implementation.** libcloak depends on `HeaderSource`; the
   implementation is being extracted from `../libspiffy`. Until it lands the
   suite runs against its own fakes and a regtest node.
@@ -157,7 +158,7 @@ Not here yet:
 ## The suite
 
 ```
-dart test                                          # 214 pass, 3 skipped
+dart test                                          # 231 pass, 3 skipped
 POOL_LOCALNET=1 dart test                          # adds the mined forgery, 215 pass
 POOL_LOCALNET=1 POOL_E2E=1 \
   dart test test/localnet_e2e_test.dart            # against a real coordinator

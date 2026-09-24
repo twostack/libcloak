@@ -8,6 +8,7 @@ import '../net/coordinator_client.dart';
 import '../pay/acknowledgement.dart';
 import '../pay/builder.dart';
 import '../pay/checker.dart';
+import '../pay/onramp.dart';
 import '../refusal.dart';
 
 /// What happened, as the journal names it.
@@ -17,6 +18,11 @@ import '../refusal.dart';
 /// that have two sides split by side, because "I issued this invoice" and "I
 /// was handed this invoice" are different facts about the same bytes and a
 /// person reading the record needs to know which happened.
+///
+/// The four after them are money crossing the pool's edge, a deposit or a
+/// withdrawal built and answered. They were added without a version bump: no
+/// field changed, and a reader that predates them refuses an unknown kind by
+/// name rather than misreading it.
 enum JournalKind {
   invoiceIssued(1),
   invoiceReceived(2),
@@ -26,7 +32,11 @@ enum JournalKind {
   proofBuilt(6),
   proofChecked(7),
   acknowledgementSent(8),
-  acknowledgementReceived(9);
+  acknowledgementReceived(9),
+  depositBuilt(10),
+  depositAnswered(11),
+  withdrawalBuilt(12),
+  withdrawalAnswered(13);
 
   final int number;
   const JournalKind(this.number);
@@ -65,7 +75,10 @@ class JournalEntry {
   static const maxReference = 32;
   static const maxNote = 512;
 
-  /// The invoice id every entry carries, which is what makes a thread.
+  /// The invoice id every entry carries, which is what makes a thread. A
+  /// deposit or withdrawal answers no invoice, and carries its transfer's
+  /// thread id here instead ([BuiltDeposit.threadId],
+  /// [BuiltWithdrawal.threadId]), which is the same length.
   static const invoiceIdLength = Invoice.idLength;
 
   /// Where this entry stands in the journal, from 1. Zero until the journal
@@ -309,6 +322,59 @@ class JournalEntry {
           note: refusal == null
               ? 'the payee acknowledged ${ack.value} in round ${ack.round}'
               : _short(refusal.reason, maxNote));
+
+  // ---- money in and out ----
+
+  /// A deposit built, before anything was sent. The reference is the covenant
+  /// transaction's txid, which is public on the chain.
+  static JournalEntry depositBuilt(BuiltDeposit deposit, {DateTime? at}) => JournalEntry._(
+      sequence: 0,
+      kind: JournalKind.depositBuilt,
+      at: at ?? DateTime.now(),
+      invoiceId: deposit.threadId,
+      amount: deposit.amount,
+      outcome: 'built',
+      reference: deposit.covenantTxid,
+      note: 'deposits ${deposit.amount} into a note of this wallet\'s, backed by covenant '
+          '${shortHex(deposit.covenantTxid)}');
+
+  /// What the coordinator said to a deposit.
+  static JournalEntry depositAnswered(BuiltDeposit deposit, SubmissionOutcome answer, {DateTime? at}) =>
+      _answered(JournalKind.depositAnswered, deposit.threadId, deposit.amount, answer, at);
+
+  /// A withdrawal built, before anything was sent.
+  static JournalEntry withdrawalBuilt(BuiltWithdrawal withdrawal, {DateTime? at}) => JournalEntry._(
+      sequence: 0,
+      kind: JournalKind.withdrawalBuilt,
+      at: at ?? DateTime.now(),
+      invoiceId: withdrawal.threadId,
+      amount: withdrawal.amount,
+      round: withdrawal.anchorRound,
+      position: withdrawal.spent.position,
+      outcome: 'built',
+      note: 'withdraws ${withdrawal.amount} from the note at leaf ${withdrawal.spent.position} holding '
+          '${withdrawal.spent.value} to pubkey hash ${shortHex(withdrawal.withdrawal.pubkeyHash)}, anchored to round '
+          '${withdrawal.anchorRound}, change ${withdrawal.change.value}');
+
+  /// What the coordinator said to a withdrawal.
+  static JournalEntry withdrawalAnswered(BuiltWithdrawal withdrawal, SubmissionOutcome answer, {DateTime? at}) =>
+      _answered(JournalKind.withdrawalAnswered, withdrawal.threadId, withdrawal.amount, answer, at);
+
+  static JournalEntry _answered(
+          JournalKind kind, List<int> thread, int amount, SubmissionOutcome answer, DateTime? at) =>
+      JournalEntry._(
+          sequence: 0,
+          kind: kind,
+          at: at ?? DateTime.now(),
+          invoiceId: thread,
+          amount: amount,
+          round: answer.round ?? 0,
+          outcome: answer.outcome.name,
+          reason: answer.reason?.name ?? answer.refusal?.step ?? '',
+          reference: answer.id,
+          note: answer.isAccepted
+              ? 'accepted into round ${answer.round}'
+              : _short(answer.refusal?.reason ?? '$answer', maxNote));
 
   // ---- wire format ----
   //

@@ -1382,3 +1382,175 @@ block root and reached round 1's real `cmRoot`, which is what the suite asserts.
   and a production witness is larger, so it cannot go on testnet. The numbers
   above do not extrapolate: the spend proof is the same size at both, the round
   transaction and therefore the standing proof are not.
+
+## 12. Money in and out: deposits and withdrawals (2026-09-24)
+
+Change `onramp-builders`, for `cloak-cli`'s tasks 0.2 and 0.3. Two builders
+beside `PaymentBuilder` in `lib/src/pay/onramp.dart`, two submission methods on
+`CoordinatorClient`, four journal kinds. Restore from a seed is still not here.
+
+### What the pool accepts, read rather than assumed
+
+Everything below was read off tstokenlib and `../pool-coordinator` before
+anything was built, and the suite then puts both builders' output through
+tstokenlib's own `ShieldedCoordinator` intake, opened at the fixture's round 1:
+the transfer's own rules, the ring, the nullifiers, the covenant, the balance
+and the spend proof. Both are accepted into round 2, and a second transfer
+backing the same covenant is refused `depositPending`.
+
+- A deposit is two dummies with a negative `publicOut`. With no real input the
+  coordinator checks no anchor (`if (p.real1 || p.real2)`), and
+  `../pool-coordinator` adds only that the covenant is mined and unspent before
+  the same intake runs.
+- The covenant outpoint is **not** in the proof and **not** in `outHash`
+  (`SHA256(W ‖ SHA256(bundle))`, with `W` the 28-byte withdrawal record). It rides
+  beside the transfer in the encoding only. That is the fact the deposit's
+  two-step shape rests on.
+- A non-empty bundle must be exactly two note bundles naming `cmOut1` and
+  `cmOut2`, so output 2 has to be a real encrypted note. The padding note's zero
+  `pk_d` is not an address anyone can encrypt to.
+
+### A deposit is proved first and backed second
+
+`DepositBuilder.prove` checks the request (an amount from 1 to below
+`PoolHash.maxValue`, an address the wallet's own `ivk` opens), proves, and
+returns a `ProvedDeposit` exposing the 32-byte `commitment` and the note's
+`NoteOpening`. The host builds its covenant from that commitment with
+`ShieldedPoolTool.createDepositTxn`, and `ProvedDeposit.backedBy(covenantTx)`
+checks the covenant and yields a `BuiltDeposit` naming the outpoint. The
+covenant needs the commitment, the transfer needs the covenant's outpoint, and
+the outpoint is outside the proof, so this order costs one proof and nothing is
+redone.
+
+`backedBy` takes the whole transaction rather than an outpoint because the
+submission has to carry the transaction anyway, and because only the transaction
+can show that the output **is** a covenant locking this commitment and exactly
+this amount. A covenant locking 401 against a deposit of 400 is refused naming
+both, before anything leaves the machine, rather than by the coordinator as
+`depositCovenant` after a round trip. It also refuses a transaction past the
+protocol's 4,096-byte bound for a submission's covenant, naming both sizes.
+
+It does **not** check which PP3 the covenant names, its refund key or its refund
+height. The host chose the round it deposits into, and the coordinator refuses a
+stale PP3 by name (`depositTarget`) and a refund too close (`depositCovenant`).
+The mutation run below shows this is real, not theoretical: 13 of the 1,000
+mutations changed exactly those terms and still backed the deposit, which is
+correct, because the note is what the deposit rests on.
+
+**The anchor is all zeros.** Nothing real is spent, so nothing checks a ring,
+and every round's padding transfers are proved against the same zeros. A root
+from the view would say when the deposit was built and buy nothing, and the
+builder would need a checked view it has no other use for. So it takes none.
+
+**Output 2 is a zero-value note to the same address.** A real note with a real
+ciphertext, as the bundle rule requires; the store never takes it on.
+
+**A deposit's shape check** is `DepositBuilder.check(transfer)`: it requires a
+covenant outpoint, then surfaces tstokenlib's `refusal()` (and through it
+`depositRefusal()`) as a `Refusal` under the field it names. A real note spent
+beside a deposit comes back at step `deposit`, "spends a real note beside a
+deposit, which the root proof refuses". The suite makes one by attaching an
+outpoint to the withdrawal's transfer.
+
+**Learning the leaf** needs nothing new. Once the round carrying the receipt is
+mined, `PaymentProofs.positionOf(round, deposit.commitment)` finds the leaf and
+`NoteStore.takeChange(opening: deposit.note, position: leaf, round: n)` takes the
+note on. The suite runs that flow on the fixture's own mined deposit (leaf 0,
+500), since a deposit built in the suite is in no mined round.
+
+### A withdrawal is a payment with the change kept and the rest paid out
+
+`WithdrawalBuilder.build` runs `PaymentBuilder`'s order: the request (a 20-byte
+pubkey hash, an amount of at least 1, a change address the wallet's own `ivk`
+opens), the note (held here, proven rather than reserved or spent, BSV, and
+holding at least the amount), the path, the anchor. Only then the proof, with
+`outHash = PoolOutHash.transferLanes(bundleHash, withdrawal: w)` and `w` naming
+exactly the amount. Output 1 is the change, output 2 a zero-value note to the
+change address.
+
+**The amounts are compared before tstokenlib's check, not after.**
+`ShieldedTransfer.refusal()` tests `outHash` first, so a withdrawal record
+swapped after proving fails there, "commits to another bundle or another
+withdrawal", naming neither amount. `WithdrawalBuilder.check` compares the
+record's amount with the public amount first and names both ("the proof takes
+300 out and the withdrawal record pays 250"), then defers to tstokenlib for
+everything else. The suite asserts both halves: libcloak names both numbers,
+and tstokenlib's own check on the same transfer stops at `outHash`.
+
+**Both builders check that the wallet's own note goes to the wallet's own
+address** (`pkdFromIvk(ivk, d) == pk_d`, one Poseidon2 hash). `PaymentBuilder`
+does not check its change address this way; that is a gap in section 7's builder
+that this change did not widen its scope to close.
+
+### Submitting: one path for anything that spends a note
+
+`submit` and the new `submitWithdrawal` now share one private path: reserve
+before the frame leaves, send, release only when `isSettled`. The rule a wallet
+double-spends itself by breaking is written once, so a payment and a withdrawal
+cannot drift apart on it. `submitDeposit` builds the `PoolSubmission` with the
+covenant attached and sends it; there is no note to reserve, and what stops one
+covenant being backed twice is the coordinator's `depositPending`. `send`'s id
+routing and resend of the same bytes under the same id are untouched.
+
+### The journal: four kinds, no new version
+
+`depositBuilt` (10), `depositAnswered` (11), `withdrawalBuilt` (12),
+`withdrawalAnswered` (13). An entry's 16-byte thread field is an invoice id, and
+neither of these answers an invoice, so they carry
+`SHA256("tsl1-libcloak/onramp/1" ‖ bundleHash)[0..16]`. The bundle hash is public
+(it is in the round's `outHash` preimage) and unique to the transfer, so the id
+is known at build time and says nothing a round does not. The version stays 1:
+no field changed, and a reader that predates the kinds refuses one by name. A
+deposit's reference is its covenant txid, which is public.
+
+### Measured (Apple M3 Pro, test parameters, `dart test test/onramp_test.dart`, five runs)
+
+| | own work | spend proof |
+|---|---|---|
+| building a deposit | **4 to 5 ms** (bound 200 ms; cloak-cli's 500 ms) | 37 to 41 ms |
+| building a withdrawal | **8 ms** (bound 200 ms; cloak-cli's 500 ms) | 37 to 46 ms |
+| a payment, for comparison, same session | 9 ms | 124 ms |
+
+| | |
+|---|---|
+| a deposit's transfer | 14,848 B |
+| a withdrawal's transfer | 14,840 B |
+| the fixture-shaped covenant transaction | 1,513 B (bound 4,096 in a submission) |
+| refusals before the proof (amount, address, note, request) | each under 100 ms, asserted |
+| 1,000 mutated covenant transactions | 45 backed (32 with the covenant output untouched, 13 with other PP3 or refund terms), 687 refused at `covenant`, 268 not transactions at all, **0 thrown** |
+| refusals searched for keys and note randomness | 17, none found |
+
+The deposit's own work is smaller than a payment's because it has no path and no
+anchor to check. The spend proofs here measure about a third of section 7's 118
+ms. Same AIR, same parameters, and the payment's figure was reproduced in the
+same session at 124 ms, so the difference is not the transfer; the likeliest
+reading is that these proofs run after the setup has already proved once and
+are warm. It was not chased further,
+because nothing depends on it: the bound is on the wallet's own work.
+
+The 268 are bytes `dartsv` would not parse as a transaction. `backedBy` takes a
+`Transaction`, so those never reach it; the claim the suite makes is about every
+one that does.
+
+### Decided against
+
+- **One call that also builds the covenant.** It would pull a funding
+  transaction, a transparent signer and a refund key into a shielded library.
+  The host's transparent wallet builds it with tstokenlib.
+- **Checking the covenant's PP3 against the view.** The view does not hold the
+  round's txid, and asking for it would be a lookup. The host knows which round
+  it deposits into, and the coordinator refuses a stale one by name.
+- **Parsing the covenant by offset.** tstokenlib does not export
+  `PoolDepositGen.parse`, so `backedBy` calls the exported
+  `ShieldedPoolTool.findDeposits`, which parses the covenant in full, and hands
+  it the PP3 read from the output's own push so the match is on everything else.
+  Exporting `PoolDepositGen.parse` and `PoolDepositTerms` from tstokenlib would
+  make that a direct call, with no change in behaviour.
+- **A journal version bump.** Nothing about an entry's fields changed.
+
+### Owed
+
+- Restore from a seed.
+- A deposit built in the suite is not mined in the suite: the fixture's rounds
+  are fixed, and proving a round with a new deposit costs an aggregation. The
+  localnet run is where a built deposit would be taken in end to end.

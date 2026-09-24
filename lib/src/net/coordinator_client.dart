@@ -5,9 +5,11 @@ import 'package:dartsv/dartsv.dart' show Transaction;
 import 'package:tstokenlib/tstokenlib.dart';
 
 import '../headers/merkle_membership.dart';
+import '../notes/note.dart';
 import '../notes/note_store.dart';
 import '../pay/builder.dart';
 import '../pay/checker.dart';
+import '../pay/onramp.dart';
 import '../pool/descriptor.dart';
 import '../pool/frontier.dart';
 import '../pool/pool_view.dart';
@@ -357,19 +359,60 @@ class CoordinatorClient {
     required NoteStore notes,
     Transaction? depositTx,
     Random? rng,
-  }) async {
+  }) =>
+      _spending(payment.transfer, payment.spent, notes: notes, depositTx: depositTx, rng: rng);
+
+  /// Submits [withdrawal], moving its note with the answer exactly as [submit]
+  /// moves a payment's: reserved before the frame goes out, released only
+  /// where the answer says the transfer is not in a round.
+  Future<SubmissionOutcome> submitWithdrawal(
+    BuiltWithdrawal withdrawal, {
+    required NoteStore notes,
+    Random? rng,
+  }) =>
+      _spending(withdrawal.transfer, withdrawal.spent, notes: notes, rng: rng);
+
+  /// Submits [deposit] with its covenant transaction attached.
+  ///
+  /// A deposit spends no note, so there is nothing to reserve and nothing to
+  /// release; what stops the same covenant being backed twice is the
+  /// coordinator, which refuses a second pending transfer naming it
+  /// (`depositPending`). The covenant goes with the transfer because the
+  /// coordinator cannot take a deposit in without it, and it is public on the
+  /// chain in any case.
+  Future<SubmissionOutcome> submitDeposit(BuiltDeposit deposit, {Random? rng}) async {
     final PoolSubmission submission;
     try {
-      submission = PoolSubmission.of(payment.transfer, pool.spendP, depositTx: depositTx, rng: rng);
+      submission = PoolSubmission.of(deposit.transfer, pool.spendP, depositTx: deposit.covenant, rng: rng);
     } on ArgumentError catch (e) {
       return SubmissionOutcome._(Submitted.unsent, const [], refusal: Refusal('submission', '${e.message}'));
     }
-    final whyReserve = notes.reserve(payment.spent);
+    return send(submission);
+  }
+
+  /// The one path a transfer that spends a note takes: reserve, send, and
+  /// release only when the answer settles it. Written once so a payment and a
+  /// withdrawal cannot drift apart on the rule a wallet double-spends itself
+  /// by breaking.
+  Future<SubmissionOutcome> _spending(
+    ShieldedTransfer transfer,
+    HeldNote spent, {
+    required NoteStore notes,
+    Transaction? depositTx,
+    Random? rng,
+  }) async {
+    final PoolSubmission submission;
+    try {
+      submission = PoolSubmission.of(transfer, pool.spendP, depositTx: depositTx, rng: rng);
+    } on ArgumentError catch (e) {
+      return SubmissionOutcome._(Submitted.unsent, const [], refusal: Refusal('submission', '${e.message}'));
+    }
+    final whyReserve = notes.reserve(spent);
     if (whyReserve != null) {
       return SubmissionOutcome._(Submitted.unsent, submission.id, refusal: whyReserve);
     }
     final outcome = await send(submission);
-    if (outcome.isSettled) notes.release(payment.spent);
+    if (outcome.isSettled) notes.release(spent);
     return outcome;
   }
 
