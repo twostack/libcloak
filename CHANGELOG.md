@@ -1,3 +1,7 @@
+## 0.2.0
+
+- **tstokenlib 3.0.0: the grind binds the queries.** A STARK verifier now squeezes its query indices from the grind digest, which closes tstokenlib's deviation D1 (the grind had bought no soundness). Proofs made with this version do not verify against a pool created with tstokenlib 2.x, and the reverse, so a wallet on 0.2.0 needs a pool created with tstokenlib 3.0.0 or later. The wire protocol is unchanged.
+
 ## 0.1.1
 
 - **The native STARK kernels arrive with the package.** libcloak now depends on

@@ -1,6 +1,6 @@
 name: libcloak
 description: "The TSL1_SP shielded pool wallet library: keys, notes, invoices, payments and their proofs, for people paying people without scanning a chain."
-version: 0.1.1
+version: 0.2.0
 repository: https://github.com/twostack/libcloak
 issue_tracker: https://github.com/twostack/libcloak/issues
 topics:
@@ -13,7 +13,7 @@ environment:
   sdk: ^3.10.0
 
 dependencies:
-  tstokenlib: ^2.1.0
+  tstokenlib: ^3.0.0
   dartsv: ^3.1.0
   convert: ^3.1.2
   crypto: ^3.0.6
